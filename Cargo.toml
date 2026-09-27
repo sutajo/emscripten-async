@@ -1,7 +1,7 @@
 [package]
 name = "emscripten-futures"
 authors = ["Tamás Suhajda"]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "A local async executor and awaitable Emscripten operations for Rust WebAssembly applications"
 license = "MIT OR Apache-2.0"
@@ -21,7 +21,7 @@ targets = ["wasm32-unknown-emscripten"]
 
 [target.'cfg(target_os = "emscripten")'.dependencies]
 emscripten-functions-sys = "5.0.401"
-emscripten-futures-macros = { version = "0.1.0", path = "macros" }
+emscripten-futures-macros = { version = "0.1.1", path = "macros" }
 futures = "0.3.34"
 local-waker = "0.1.4"
 
