@@ -1,7 +1,6 @@
 use super::legacy::{LegacyOperation, legacy};
-use super::{
-    Completion, c_string, completion, copy_bytes, failed, loaded_bytes, local_queue, receive,
-};
+use super::{Completion, c_string, completion, copy_bytes, failed, loaded_bytes, receive};
+use crate::channel::mpsc;
 use emscripten_functions_sys::emscripten as ffi;
 use std::{
     cell::RefCell,
@@ -101,8 +100,8 @@ unsafe extern "C" fn download_data_error(
     };
 }
 
-fn download_state<T>() -> (DownloadGuard<T>, local_queue::Receiver<io::Result<T>>) {
-    let (sender, receiver) = local_queue::bounded(1);
+fn download_state<T>() -> (DownloadGuard<T>, mpsc::Receiver<io::Result<T>>) {
+    let (sender, receiver) = mpsc::bounded(1);
     (
         DownloadGuard {
             handle: -1,

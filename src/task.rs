@@ -24,7 +24,6 @@ mod download;
 mod dylib;
 mod indexed_db;
 mod legacy;
-pub mod local_queue;
 mod preload;
 mod script;
 mod timer;
@@ -44,19 +43,20 @@ pub use worker::call_worker;
 #[cfg(test)]
 mod tests;
 
+use crate::channel::mpsc;
 use std::{
     ffi::{CString, c_void},
     io,
 };
 
-type Completion<T> = local_queue::Sender<io::Result<T>>;
+type Completion<T> = mpsc::Sender<io::Result<T>>;
 
 fn c_string(value: &str) -> io::Result<CString> {
     CString::new(value).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
 }
 
-fn completion<T>() -> (*mut c_void, local_queue::Receiver<io::Result<T>>) {
-    let (sender, receiver) = local_queue::bounded::<io::Result<T>>(1);
+fn completion<T>() -> (*mut c_void, mpsc::Receiver<io::Result<T>>) {
+    let (sender, receiver) = mpsc::bounded::<io::Result<T>>(1);
     (Box::into_raw(Box::new(sender)).cast(), receiver)
 }
 
@@ -74,7 +74,7 @@ unsafe extern "C" fn succeeded(arg: *mut c_void) {
     unsafe { complete(arg, Ok(())) };
 }
 
-async fn receive<T>(mut receiver: local_queue::Receiver<io::Result<T>>) -> io::Result<T> {
+async fn receive<T>(mut receiver: mpsc::Receiver<io::Result<T>>) -> io::Result<T> {
     receiver
         .recv()
         .await

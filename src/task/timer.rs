@@ -1,4 +1,5 @@
-use super::{complete, completion, local_queue, receive, succeeded};
+use super::{complete, completion, receive, succeeded};
+use crate::channel::mpsc;
 use emscripten_functions_sys::{emscripten as ffi, html5};
 use std::{ffi::c_void, time::Duration};
 
@@ -73,9 +74,9 @@ pub async fn main_loop_blocker(counted: bool) {
 /// Timestamps preserve fractional milliseconds. If a consumer falls
 /// behind, extra ticks are discarded. After dropping the stream, the next
 /// scheduled tick stops the timer and releases its callback state.
-pub type Ticks = local_queue::Receiver<Duration>;
+pub type Ticks = mpsc::Receiver<Duration>;
 
-type TickSender = local_queue::Sender<Duration>;
+type TickSender = mpsc::Sender<Duration>;
 
 // Loop callbacks own their sender until the receiving stream is disconnected.
 unsafe extern "C" fn loop_tick(time: f64, arg: *mut c_void) -> bool {
@@ -96,7 +97,7 @@ unsafe extern "C" fn immediate_tick(arg: *mut c_void) -> bool {
 
 fn tick_channel() -> (*mut c_void, Ticks) {
     // Preserve the old futures channel's buffer plus its one sender slot.
-    let (sender, receiver) = local_queue::bounded(2);
+    let (sender, receiver) = mpsc::bounded(2);
     (Box::into_raw(Box::new(sender)).cast(), receiver)
 }
 
@@ -148,7 +149,7 @@ pub fn interval(period: Duration) -> Ticks {
     }
 
     let millis = i32::try_from(period.as_millis()).expect("period exceeds i32::MAX ms");
-    let (sender, receiver) = local_queue::bounded(2);
+    let (sender, receiver) = mpsc::bounded(2);
     let state = Box::into_raw(Box::new(Interval { sender, id: 0 }));
 
     // set_interval schedules its first callback after returning, so initialize

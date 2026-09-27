@@ -1,4 +1,5 @@
-use super::{Completion, local_queue, receive};
+use super::{Completion, receive};
+use crate::channel::mpsc;
 use emscripten_functions_sys::emscripten as ffi;
 use std::{
     cell::RefCell,
@@ -46,7 +47,7 @@ unsafe extern "C" fn legacy_file_error(_: *const c_char) {
 
 pub(super) async fn legacy(operation: LegacyOperation) -> io::Result<()> {
     let guard = LEGACY_LOCK.lock().await;
-    let (sender, receiver) = local_queue::bounded(1);
+    let (sender, receiver) = mpsc::bounded(1);
     let (kind, first, second) = match &operation {
         LegacyOperation::Download(url, file) => (0, url.as_ptr(), file.as_ptr()),
         LegacyOperation::LoadScript(url) => (1, url.as_ptr(), std::ptr::null()),

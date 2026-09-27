@@ -20,7 +20,7 @@ Add the dependency to your application:
 
 ```toml
 [dependencies]
-emscripten-futures = "0.3"
+emscripten-futures = "0.4"
 ```
 
 Enable JSPI when linking your application. For example, in `.cargo/config.toml`:
@@ -62,7 +62,7 @@ Dynamic loading and image/audio preloading require the corresponding Emscripten
 linker options. Individual functions document their requirements and cancellation
 behavior. `task::fetch` wraps Emscripten's asynchronous wget-data API.
 
-Task futures and streams use channels local to the calling thread. `task::local_queue`
+Task futures and streams use channels local to the calling thread. `channel::mpsc`
 provides unbounded and bounded queues; bounded sends return an error when full.
 Dropping a timer stream stops its callbacks and releases their state on the next tick.
 
