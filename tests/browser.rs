@@ -78,6 +78,7 @@ fn browser_tasks() {
     }
     let mut browser = Browser(command.spawn().expect("launch Chrome"));
     let deadline = Instant::now() + Duration::from_secs(45);
+    let mut concurrent_downloads = Vec::new();
     loop {
         assert!(
             Instant::now() < deadline,
@@ -99,6 +100,21 @@ fn browser_tasks() {
             "/test.wasm" => (200, "application/wasm", wasm.clone()),
             "/bytes" => (200, "application/octet-stream", vec![0, 1, 2, 255]),
             "/empty" => (204, "text/plain", Vec::new()),
+            url if url.starts_with("/join-download/") => {
+                let index: u8 = url.trim_start_matches("/join-download/").parse().unwrap();
+                assert!(index < 5);
+                concurrent_downloads.push((index, request));
+                // Hold every response until all five requests have arrived.
+                // This proves they overlap without relying on timing thresholds.
+                if concurrent_downloads.len() == 5 {
+                    for (index, request) in concurrent_downloads.drain(..).rev() {
+                        request
+                            .respond(Response::from_data(vec![index, 0, 255]))
+                            .unwrap();
+                    }
+                }
+                continue;
+            }
             "/progress" | "/progress-unknown" => {
                 let length = (request.url() == "/progress").then_some(65536);
                 std::thread::spawn(move || {

@@ -6,6 +6,8 @@ use std::{cell::Cell, time::Duration};
 fn main() {
     println!("running browser_downloads_and_http_errors");
     browser_downloads_and_http_errors();
+    println!("running browser_five_file_downloads_with_join");
+    browser_five_file_downloads_with_join();
     println!("running browser_download_cancellation");
     browser_download_cancellation();
     println!("running browser_download_progress");
@@ -48,6 +50,24 @@ fn browser_downloads_and_http_errors() {
                 .is_err()
         );
         std::fs::remove_file("/download-test.bin").unwrap();
+    });
+}
+
+fn browser_five_file_downloads_with_join() {
+    block_on(async {
+        let (a, b, c, d, e) = futures::join!(
+            Wget::file("/join-download/0", "/join-0.bin", "GET", ""),
+            Wget::file("/join-download/1", "/join-1.bin", "GET", ""),
+            Wget::file("/join-download/2", "/join-2.bin", "GET", ""),
+            Wget::file("/join-download/3", "/join-3.bin", "GET", ""),
+            Wget::file("/join-download/4", "/join-4.bin", "GET", ""),
+        );
+        for (index, result) in [a, b, c, d, e].into_iter().enumerate() {
+            result.unwrap_or_else(|error| panic!("download {index} failed: {error}"));
+            let file = format!("/join-{index}.bin");
+            assert_eq!(std::fs::read(&file).unwrap(), [index as u8, 0, 255]);
+            std::fs::remove_file(file).unwrap();
+        }
     });
 }
 
