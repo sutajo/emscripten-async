@@ -7,6 +7,8 @@ The executor uses JavaScript Promise Integration (JSPI) to yield to the browser
 or Node event loop while Rust futures are pending. It provides `block_on`,
 `LocalPool`, and `LocalSpawner` and works with `futures` combinators such as
 `join` and `select`. Run the executor and its wakeups on the same thread.
+Its internal notifier coalesces wakeups and creates a JavaScript promise only
+when it must suspend; already pending notifications require no allocation.
 
 ## Usage
 
@@ -20,7 +22,7 @@ Add the dependency to your application:
 
 ```toml
 [dependencies]
-emscripten-futures = "0.5"
+emscripten-futures = "0.6"
 ```
 
 Enable JSPI when linking your application. For example, in `.cargo/config.toml`:

@@ -20,5 +20,4 @@ pub use emscripten_futures_macros::test;
 
 pub mod channel;
 pub mod executor;
-pub mod promise;
 pub mod task;
