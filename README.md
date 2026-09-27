@@ -20,7 +20,7 @@ Add the dependency to your application:
 
 ```toml
 [dependencies]
-emscripten-futures = "0.4"
+emscripten-futures = "0.5"
 ```
 
 Enable JSPI when linking your application. For example, in `.cargo/config.toml`:
@@ -60,7 +60,17 @@ fn main() {
 Browser APIs such as IndexedDB and animation frames require a browser environment.
 Dynamic loading and image/audio preloading require the corresponding Emscripten
 linker options. Individual functions document their requirements and cancellation
-behavior. `task::fetch` wraps Emscripten's asynchronous wget-data API.
+behavior. `task::Wget::data(url, method, params)` downloads owned bytes, and
+`task::Wget::file(url, file, method, params)` downloads into the virtual filesystem.
+Both support GET and POST and abort pending requests when their futures are dropped.
+`Wget::legacy_data`, `Wget::legacy_file`, `load_script`, and `preload` are deprecated
+because they use legacy operations. `legacy_file` also runs preload plugins.
+
+Use `Wget::data_with_progress(url, method, params, callback)` to receive
+`Progress { loaded, total }` updates in bytes (`total` is `None` when unknown).
+`Wget::file_with_progress(url, file, method, params, callback)` reports integer
+percentages when the total size is known. Callbacks may borrow local state and
+run as the download future is polled; dropping the future stops further callbacks.
 
 Task futures and streams use channels local to the calling thread. `channel::mpsc`
 provides unbounded and bounded queues; bounded sends return an error when full.

@@ -43,7 +43,7 @@ checksum = "4c1f3aa9a59cdd296650e7ba9bb966ad418aa754c17a5af69860a51153106a95"
 
 [[package]]
 name = "emscripten-futures"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "browser-test-bin",
  "emscripten-functions-sys",

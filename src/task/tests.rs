@@ -36,20 +36,23 @@ async fn sleep_completes() {
 }
 
 #[test]
-fn fetch_returns_owned_bytes() {
+#[allow(deprecated)] // Exercise the retained legacy APIs.
+fn legacy_data_returns_owned_bytes() {
     // The Node runner loads local paths through Emscripten's async loader.
-    let bytes = block_on(fetch("Cargo.toml")).unwrap();
+    let bytes = block_on(Wget::legacy_data("Cargo.toml")).unwrap();
     assert_eq!(bytes, include_bytes!("../../Cargo.toml"));
 }
 
 #[test]
-fn fetch_reports_download_failure() {
-    assert!(block_on(fetch("__emscripten_async_missing_fetch_test__")).is_err());
+#[allow(deprecated)] // Exercise the retained legacy APIs.
+fn legacy_data_reports_download_failure() {
+    assert!(block_on(Wget::legacy_data("__emscripten_async_missing_fetch_test__")).is_err());
 }
 
 #[test]
-fn fetch_rejects_nul_in_url() {
-    let error = block_on(fetch("invalid\0url")).unwrap_err();
+#[allow(deprecated)] // Exercise the retained legacy APIs.
+fn legacy_data_rejects_nul_in_url() {
+    let error = block_on(Wget::legacy_data("invalid\0url")).unwrap_err();
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 }
 
@@ -112,6 +115,7 @@ fn main_loop_processes_both_blocker_types() {
 }
 
 #[test]
+#[allow(deprecated)] // Exercise the retained legacy APIs.
 fn invalid_inputs_fail_before_starting_operations() {
     block_on(async {
         assert_eq!(
@@ -123,15 +127,16 @@ fn invalid_inputs_fail_before_starting_operations() {
         assert!(db.store("bad\0key", b"data").await.is_err());
         assert!(db.delete("bad\0key").await.is_err());
         assert!(db.exists("bad\0key").await.is_err());
-        assert!(wget("bad\0url", "/file").await.is_err());
-        assert!(wget2_data("/bytes", "INVALID", "").await.is_err());
-        assert!(wget2("/bytes", "/file", "INVALID", "").await.is_err());
+        assert!(Wget::legacy_file("bad\0url", "/file").await.is_err());
+        assert!(Wget::data("/bytes", "INVALID", "").await.is_err());
+        assert!(Wget::file("/bytes", "/file", "INVALID", "").await.is_err());
         assert!(preload_data(b"data", "bad\0suffix").await.is_err());
         assert!(unsafe { load_script("bad\0url").await }.is_err());
     });
 }
 
 #[test]
+#[allow(deprecated)] // Exercise the retained legacy APIs.
 fn missing_preload_file_returns_error() {
     assert_eq!(
         block_on(preload("/__missing_preload_file__"))

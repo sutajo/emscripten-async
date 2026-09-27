@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "emscripten"))]
 
 use std::{
+    io::{self, Read},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -8,6 +9,20 @@ use std::{
 use tiny_http::{Header, Response, Server};
 
 struct Browser(Child);
+
+struct DownloadBody(usize);
+
+impl Read for DownloadBody {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let len = buffer.len().min(self.0).min(8192);
+        if len != 0 {
+            std::thread::sleep(Duration::from_millis(20));
+            buffer[..len].fill(0xa5);
+            self.0 -= len;
+        }
+        Ok(len)
+    }
+}
 
 impl Drop for Browser {
     fn drop(&mut self) {
@@ -84,6 +99,23 @@ fn browser_tasks() {
             "/test.wasm" => (200, "application/wasm", wasm.clone()),
             "/bytes" => (200, "application/octet-stream", vec![0, 1, 2, 255]),
             "/empty" => (204, "text/plain", Vec::new()),
+            "/progress" | "/progress-unknown" => {
+                let length = (request.url() == "/progress").then_some(65536);
+                std::thread::spawn(move || {
+                    let response = Response::new(
+                        tiny_http::StatusCode(200),
+                        vec![
+                            Header::from_bytes("Content-Type", "application/octet-stream").unwrap(),
+                        ],
+                        DownloadBody(65536),
+                        length,
+                        None,
+                    )
+                    .with_chunked_threshold(usize::MAX);
+                    let _ = request.respond(response);
+                });
+                continue;
+            }
             "/echo" => {
                 let mut body = Vec::new();
                 request.as_reader().read_to_end(&mut body).unwrap();

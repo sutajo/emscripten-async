@@ -1,13 +1,17 @@
 use emscripten_functions_sys::emscripten as ffi;
 use emscripten_futures::{executor::block_on, task::*};
 use futures::{StreamExt, future::Either};
-use std::time::Duration;
+use std::{cell::Cell, time::Duration};
 
 fn main() {
     println!("running browser_downloads_and_http_errors");
     browser_downloads_and_http_errors();
     println!("running browser_download_cancellation");
     browser_download_cancellation();
+    println!("running browser_download_progress");
+    browser_download_progress();
+    println!("running browser_progress_cancellation");
+    browser_progress_cancellation();
     println!("running browser_indexeddb_round_trip");
     browser_indexeddb_round_trip();
     println!("running browser_legacy_callbacks_and_preloading");
@@ -24,22 +28,22 @@ fn main() {
 fn browser_downloads_and_http_errors() {
     block_on(async {
         assert_eq!(
-            wget2_data("/bytes", "GET", "").await.unwrap(),
+            Wget::data("/bytes", "GET", "").await.unwrap(),
             [0, 1, 2, 255]
         );
-        assert!(wget2_data("/empty", "GET", "").await.unwrap().is_empty());
+        assert!(Wget::data("/empty", "GET", "").await.unwrap().is_empty());
         assert_eq!(
-            wget2_data("/echo", "POST", "hello=world").await.unwrap(),
+            Wget::data("/echo", "POST", "hello=world").await.unwrap(),
             b"hello=world"
         );
-        let error = wget2_data("/missing", "GET", "").await.unwrap_err();
+        let error = Wget::data("/missing", "GET", "").await.unwrap_err();
         assert!(error.to_string().contains("404"));
-        wget2("/bytes", "/download-test.bin", "GET", "")
+        Wget::file("/bytes", "/download-test.bin", "GET", "")
             .await
             .unwrap();
         assert_eq!(std::fs::read("/download-test.bin").unwrap(), [0, 1, 2, 255]);
         assert!(
-            wget2("/missing", "/missing-test.bin", "GET", "")
+            Wget::file("/missing", "/missing-test.bin", "GET", "")
                 .await
                 .is_err()
         );
@@ -49,7 +53,7 @@ fn browser_downloads_and_http_errors() {
 
 fn browser_download_cancellation() {
     block_on(async {
-        let request = Box::pin(wget2_data("/delay", "GET", ""));
+        let request = Box::pin(Wget::data("/delay", "GET", ""));
         let timer = Box::pin(sleep(Duration::ZERO));
         match futures::future::select(request, timer).await {
             Either::Right(((), request)) => drop(request),
@@ -57,9 +61,96 @@ fn browser_download_cancellation() {
         }
         sleep(Duration::from_millis(50)).await;
         assert_eq!(
-            wget2_data("/bytes", "GET", "").await.unwrap(),
+            Wget::data("/bytes", "GET", "").await.unwrap(),
             [0, 1, 2, 255]
         );
+    });
+}
+
+fn browser_download_progress() {
+    block_on(async {
+        for (url, total) in [("/progress", Some(65536)), ("/progress-unknown", None)] {
+            let mut updates = Vec::new();
+            let bytes = Wget::data_with_progress(url, "GET", "", |progress| updates.push(progress))
+                .await
+                .unwrap();
+            assert_eq!(bytes, vec![0xa5; 65536]);
+            assert_eq!(
+                updates.last(),
+                Some(&Progress {
+                    loaded: 65536,
+                    total
+                })
+            );
+            assert!(updates.iter().all(|progress| progress.total == total));
+            assert!(
+                updates
+                    .windows(2)
+                    .all(|pair| pair[0].loaded <= pair[1].loaded)
+            );
+        }
+
+        let mut percentages = Vec::new();
+        Wget::file_with_progress("/progress", "/progress.bin", "GET", "", |percent| {
+            percentages.push(percent);
+        })
+        .await
+        .unwrap();
+        assert_eq!(percentages.last(), Some(&100));
+        assert!(
+            percentages
+                .iter()
+                .all(|percent| (0..=100).contains(percent))
+        );
+        assert!(percentages.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(std::fs::read("/progress.bin").unwrap(), vec![0xa5; 65536]);
+        std::fs::remove_file("/progress.bin").unwrap();
+    });
+}
+
+async fn cancel_after_progress(
+    request: impl std::future::Future<Output = std::io::Result<()>>,
+    calls: &Cell<usize>,
+) {
+    let first_progress = async {
+        while calls.get() == 0 {
+            sleep(Duration::from_millis(1)).await;
+        }
+    };
+    match futures::future::select(Box::pin(request), Box::pin(first_progress)).await {
+        Either::Right(((), request)) => drop(request),
+        Either::Left(_) => panic!("download finished before cancellation after progress"),
+    }
+    let before = calls.get();
+    assert!(before > 0);
+    sleep(Duration::from_millis(200)).await;
+    assert_eq!(calls.get(), before, "progress continued after cancellation");
+}
+
+fn browser_progress_cancellation() {
+    block_on(async {
+        let calls = Cell::new(0);
+        cancel_after_progress(
+            async {
+                Wget::data_with_progress("/progress", "GET", "", |_| {
+                    calls.set(calls.get() + 1);
+                })
+                .await
+                .map(|_| ())
+            },
+            &calls,
+        )
+        .await;
+
+        calls.set(0);
+        cancel_after_progress(
+            Wget::file_with_progress("/progress", "/canceled-progress.bin", "GET", "", |_| {
+                calls.set(calls.get() + 1);
+            }),
+            &calls,
+        )
+        .await;
+        assert!(!std::path::Path::new("/canceled-progress.bin").exists());
     });
 }
 
@@ -82,11 +173,12 @@ fn browser_indexeddb_round_trip() {
     });
 }
 
+#[allow(deprecated)] // Exercise the retained legacy APIs.
 fn browser_legacy_callbacks_and_preloading() {
     block_on(async {
         let (first, second) = futures::join!(
-            wget("/bytes", "/legacy-one.bin"),
-            wget("/bytes", "/legacy-two.bin")
+            Wget::legacy_file("/bytes", "/legacy-one.bin"),
+            Wget::legacy_file("/bytes", "/legacy-two.bin")
         );
         first.unwrap();
         second.unwrap();
@@ -94,7 +186,11 @@ fn browser_legacy_callbacks_and_preloading() {
         assert_eq!(std::fs::read("/legacy-two.bin").unwrap(), [0, 1, 2, 255]);
         preload("/legacy-one.bin").await.unwrap();
         assert!(!preload_data(b"content", "bin").await.unwrap().is_empty());
-        assert!(wget("/missing", "/missing-legacy.bin").await.is_err());
+        assert!(
+            Wget::legacy_file("/missing", "/missing-legacy.bin")
+                .await
+                .is_err()
+        );
         unsafe { load_script("/script.js").await }.unwrap();
         unsafe { load_script("/script.js").await }.unwrap();
         assert_eq!(
@@ -107,14 +203,17 @@ fn browser_legacy_callbacks_and_preloading() {
     });
 }
 
+#[allow(deprecated)] // Exercise the retained legacy APIs.
 fn browser_canceled_legacy_request_does_not_steal_next_callback() {
     block_on(async {
-        let request = Box::pin(wget("/delay", "/abandoned-legacy.bin"));
+        let request = Box::pin(Wget::legacy_file("/delay", "/abandoned-legacy.bin"));
         match futures::future::select(request, Box::pin(sleep(Duration::ZERO))).await {
             Either::Right(((), request)) => drop(request),
             Either::Left(_) => panic!("delayed download completed before cancellation"),
         }
-        wget("/bytes", "/next-legacy.bin").await.unwrap();
+        Wget::legacy_file("/bytes", "/next-legacy.bin")
+            .await
+            .unwrap();
         assert_eq!(std::fs::read("/next-legacy.bin").unwrap(), [0, 1, 2, 255]);
         std::fs::remove_file("/abandoned-legacy.bin").unwrap();
         std::fs::remove_file("/next-legacy.bin").unwrap();

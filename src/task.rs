@@ -9,7 +9,8 @@
 //! | repeating timers and frames | [`interval`], [`timeout_loop`], [`immediate_loop`], [`animation_frames`] |
 //! | next animation frame | [`animation_frame`] |
 //! | counted / uncounted main-loop blockers | [`main_loop_blocker`] |
-//! | wget / wget_data / wget2 / wget2_data | [`wget`], [`fetch`], [`wget2`], [`wget2_data`] |
+//! | downloads to bytes / files | [`Wget::data`], [`Wget::file`] |
+//! | legacy downloads (deprecated) | [`Wget::legacy_data`], [`Wget::legacy_file`] |
 //! | load JavaScript | [`load_script`] |
 //! | IndexedDB async operations | [`Idb`] |
 //! | file / data preload plugins | [`preload`], [`preload_data`] |
@@ -29,10 +30,12 @@ mod script;
 mod timer;
 mod worker;
 
-pub use download::{fetch, wget, wget2, wget2_data};
+pub use download::{Progress, Wget};
 pub use dylib::{Library, dlopen};
 pub use indexed_db::Idb;
+#[allow(deprecated)] // Keep the deprecated APIs available to callers.
 pub use preload::{preload, preload_data};
+#[allow(deprecated)]
 pub use script::load_script;
 pub use timer::{
     Ticks, animation_frame, animation_frames, immediate_loop, interval, main_loop_blocker, sleep,

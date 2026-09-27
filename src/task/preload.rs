@@ -12,6 +12,7 @@ unsafe extern "C" {
 }
 
 /// Runs preload plugins on a file already in the virtual filesystem.
+#[deprecated(note = "uses serialized legacy callbacks; use preload_data for in-memory assets")]
 pub async fn preload(file: &str) -> io::Result<()> {
     // Avoid the native API's missing-file early return, which leaves a runtime
     // keepalive outstanding in the current SDK.
