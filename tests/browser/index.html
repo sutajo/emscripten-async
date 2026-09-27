@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+  const lines = [];
+  let reported = false;
+  function report(code) {
+    if (reported) return;
+    reported = true;
+    fetch('/report', {method: 'POST', body: JSON.stringify({code, lines})});
+  }
+  var Module = {
+    locateFile: name => name.endsWith('.wasm') ? '/test.wasm' : name,
+    print: text => lines.push(text),
+    printErr: text => lines.push(text),
+    onExit: code => report(code),
+    postRun: [() => report(EXITSTATUS)],
+    onAbort: error => { lines.push(String(error)); report(1); }
+  };
+  addEventListener('error', event => { lines.push(event.message); report(1); });
+  addEventListener('unhandledrejection', event => { lines.push(String(event.reason)); report(1); });
+</script>
+<script src="/test.js"></script>

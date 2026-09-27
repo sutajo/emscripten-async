@@ -1,0 +1,10 @@
+[package]
+name = "browser-test-bin"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+emscripten-futures = { path = "../.." }
+emscripten-functions-sys = "5.0.401"
+futures = "0.3.34"
