@@ -1,8 +1,10 @@
 use super::legacy::{LegacyOperation, legacy};
-use super::{Completion, c_string, completion, copy_bytes, failed, loaded_bytes, receive};
+use super::{
+    Completion, c_string, completion, copy_bytes, failed, loaded_bytes, local_queue, receive,
+};
 use emscripten_functions_sys::emscripten as ffi;
-use futures::channel::oneshot;
 use std::{
+    cell::RefCell,
     ffi::{CStr, CString, c_char, c_void},
     io,
 };
@@ -38,8 +40,7 @@ pub async fn wget(url: &str, file: &str) -> io::Result<()> {
 // cancellation can abort the request and free its sender without a leak.
 struct DownloadGuard<T> {
     handle: i32,
-    sender: Box<std::sync::Mutex<Option<Completion<T>>>>,
-    _local: std::marker::PhantomData<std::rc::Rc<()>>,
+    sender: Box<RefCell<Option<Completion<T>>>>,
 }
 
 impl<T> Drop for DownloadGuard<T> {
@@ -50,11 +51,10 @@ impl<T> Drop for DownloadGuard<T> {
 }
 
 unsafe fn download_complete<T>(arg: *mut c_void, result: io::Result<T>) {
-    let sender = unsafe { &*arg.cast::<std::sync::Mutex<Option<Completion<T>>>>() }
-        .lock()
-        .unwrap()
+    let sender = unsafe { &*arg.cast::<RefCell<Option<Completion<T>>>>() }
+        .borrow_mut()
         .take();
-    // Release the state borrow before send invokes a potentially reentrant waker.
+    // Release the callback state borrow before notifying the receiver.
     if let Some(sender) = sender {
         let _ = sender.send(result);
     }
@@ -101,13 +101,12 @@ unsafe extern "C" fn download_data_error(
     };
 }
 
-fn download_state<T>() -> (DownloadGuard<T>, oneshot::Receiver<io::Result<T>>) {
-    let (sender, receiver) = oneshot::channel();
+fn download_state<T>() -> (DownloadGuard<T>, local_queue::Receiver<io::Result<T>>) {
+    let (sender, receiver) = local_queue::bounded(1);
     (
         DownloadGuard {
             handle: -1,
-            sender: Box::new(std::sync::Mutex::new(Some(sender))),
-            _local: std::marker::PhantomData,
+            sender: Box::new(RefCell::new(Some(sender))),
         },
         receiver,
     )
@@ -121,7 +120,7 @@ pub async fn wget2_data(url: &str, method: &str, params: &str) -> io::Result<Vec
     let method = request_method(method)?;
     let params = c_string(params)?;
     let (mut request, receiver) = download_state::<Vec<u8>>();
-    let arg = (&*request.sender as *const std::sync::Mutex<Option<Completion<Vec<u8>>>>)
+    let arg = (&*request.sender as *const RefCell<Option<Completion<Vec<u8>>>>)
         .cast_mut()
         .cast();
     request.handle = unsafe {
@@ -150,7 +149,7 @@ pub async fn wget2(url: &str, file: &str, method: &str, params: &str) -> io::Res
     let method = request_method(method)?;
     let params = c_string(params)?;
     let (mut request, receiver) = download_state::<()>();
-    let arg = (&*request.sender as *const std::sync::Mutex<Option<Completion<()>>>)
+    let arg = (&*request.sender as *const RefCell<Option<Completion<()>>>)
         .cast_mut()
         .cast();
     request.handle = unsafe {

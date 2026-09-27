@@ -1,7 +1,7 @@
-use super::{Completion, receive};
+use super::{Completion, local_queue, receive};
 use emscripten_functions_sys::emscripten as ffi;
-use futures::channel::oneshot;
 use std::{
+    cell::RefCell,
     ffi::{CString, c_char},
     io,
 };
@@ -10,7 +10,9 @@ use std::{
 // callbacks can identify the request. The callback owns the lock, so canceling
 // an await cannot accidentally deliver its response to the next request.
 static LEGACY_LOCK: futures::lock::Mutex<()> = futures::lock::Mutex::new(());
-static LEGACY_REQUEST: std::sync::Mutex<Option<LegacyRequest>> = std::sync::Mutex::new(None);
+thread_local! {
+    static LEGACY_REQUEST: RefCell<Option<LegacyRequest>> = const { RefCell::new(None) };
+}
 
 pub(super) enum LegacyOperation {
     Download(CString, CString),
@@ -25,7 +27,7 @@ struct LegacyRequest {
 }
 
 fn legacy_complete(result: io::Result<()>) {
-    let request = LEGACY_REQUEST.lock().unwrap().take().unwrap();
+    let request = LEGACY_REQUEST.with(|slot| slot.borrow_mut().take().unwrap());
     let _ = request.sender.send(result);
 }
 
@@ -44,19 +46,21 @@ unsafe extern "C" fn legacy_file_error(_: *const c_char) {
 
 pub(super) async fn legacy(operation: LegacyOperation) -> io::Result<()> {
     let guard = LEGACY_LOCK.lock().await;
-    let (sender, receiver) = oneshot::channel();
+    let (sender, receiver) = local_queue::bounded(1);
     let (kind, first, second) = match &operation {
         LegacyOperation::Download(url, file) => (0, url.as_ptr(), file.as_ptr()),
         LegacyOperation::LoadScript(url) => (1, url.as_ptr(), std::ptr::null()),
         LegacyOperation::Preload(file) => (2, file.as_ptr(), std::ptr::null()),
     };
-    *LEGACY_REQUEST.lock().unwrap() = Some(LegacyRequest {
-        _operation: operation,
-        sender,
-        _guard: guard,
+    LEGACY_REQUEST.with(|slot| {
+        *slot.borrow_mut() = Some(LegacyRequest {
+            _operation: operation,
+            sender,
+            _guard: guard,
+        });
     });
     // The installed request owns every pointer, even if the future is dropped.
-    // No mutex is held across a call that may invoke a callback synchronously.
+    // No state borrow is held across a call that may invoke a callback synchronously.
     unsafe {
         match kind {
             0 => ffi::emscripten_async_wget(

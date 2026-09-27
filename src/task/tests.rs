@@ -2,7 +2,31 @@ use super::*;
 use crate::executor::block_on;
 use emscripten_functions_sys::emscripten as ffi;
 use futures::StreamExt;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+#[test]
+fn completion_can_arrive_before_the_first_poll() {
+    let (arg, receiver) = completion::<u32>();
+    unsafe { complete(arg, Ok(42)) };
+    assert_eq!(block_on(receive(receiver)).unwrap(), 42);
+}
+
+#[test]
+fn completion_cancellation_releases_callback_values() {
+    let (arg, receiver) = completion::<std::rc::Rc<()>>();
+    drop(receiver);
+    let value = std::rc::Rc::new(());
+    unsafe { complete(arg, Ok(value.clone())) };
+    assert_eq!(std::rc::Rc::strong_count(&value), 1);
+
+    let (arg, receiver) = completion::<()>();
+    // Simulate the callback state being released without producing a result.
+    drop(unsafe { Box::from_raw(arg.cast::<Completion<()>>()) });
+    assert_eq!(
+        block_on(receive(receiver)).unwrap_err().to_string(),
+        "operation canceled"
+    );
+}
 
 #[crate::test]
 async fn sleep_completes() {
@@ -51,6 +75,27 @@ fn timer_operations_complete() {
         // Let callback-driven loops observe that their receivers were dropped.
         sleep(Duration::from_millis(5)).await;
     });
+}
+
+#[crate::test]
+async fn interval_each_tick_is_within_20ms() {
+    let period = Duration::from_millis(120);
+    let tolerance = Duration::from_millis(20);
+    let mut previous = Instant::now();
+    let mut ticks = interval(period);
+    for tick in 1..=5 {
+        ticks
+            .next()
+            .await
+            .expect("interval ended before five ticks");
+        let now = Instant::now();
+        let elapsed = now.duration_since(previous);
+        previous = now;
+        assert!(
+            elapsed.abs_diff(period) <= tolerance,
+            "tick {tick} arrived after {elapsed:?}; expected {period:?} ± {tolerance:?}"
+        );
+    }
 }
 
 #[test]

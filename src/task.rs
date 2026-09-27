@@ -1,6 +1,7 @@
 //! Awaitable Emscripten operations. Unless stated otherwise, dropping a future
 //! leaves its operation running and its completion callback releases the state.
 //! Browser-only APIs retain their browser requirements (XHR, IndexedDB, DOM, etc.).
+//! Task channels are local to the calling thread.
 //!
 //! | Operation | Task API |
 //! | --- | --- |
@@ -23,6 +24,7 @@ mod download;
 mod dylib;
 mod indexed_db;
 mod legacy;
+pub mod local_queue;
 mod preload;
 mod script;
 mod timer;
@@ -42,20 +44,19 @@ pub use worker::call_worker;
 #[cfg(test)]
 mod tests;
 
-use futures::channel::oneshot;
 use std::{
     ffi::{CString, c_void},
     io,
 };
 
-type Completion<T> = oneshot::Sender<io::Result<T>>;
+type Completion<T> = local_queue::Sender<io::Result<T>>;
 
 fn c_string(value: &str) -> io::Result<CString> {
     CString::new(value).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
 }
 
-fn completion<T>() -> (*mut c_void, oneshot::Receiver<io::Result<T>>) {
-    let (sender, receiver) = oneshot::channel::<io::Result<T>>();
+fn completion<T>() -> (*mut c_void, local_queue::Receiver<io::Result<T>>) {
+    let (sender, receiver) = local_queue::bounded::<io::Result<T>>(1);
     (Box::into_raw(Box::new(sender)).cast(), receiver)
 }
 
@@ -73,10 +74,11 @@ unsafe extern "C" fn succeeded(arg: *mut c_void) {
     unsafe { complete(arg, Ok(())) };
 }
 
-async fn receive<T>(receiver: oneshot::Receiver<io::Result<T>>) -> io::Result<T> {
+async fn receive<T>(mut receiver: local_queue::Receiver<io::Result<T>>) -> io::Result<T> {
     receiver
+        .recv()
         .await
-        .map_err(|_| io::Error::other("operation canceled"))?
+        .ok_or_else(|| io::Error::other("operation canceled"))?
 }
 
 // Nonempty buffers must contain len readable bytes for the duration of the call.

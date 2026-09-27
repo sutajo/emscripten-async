@@ -43,12 +43,13 @@ checksum = "4c1f3aa9a59cdd296650e7ba9bb966ad418aa754c17a5af69860a51153106a95"
 
 [[package]]
 name = "emscripten-futures"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "browser-test-bin",
  "emscripten-functions-sys",
  "emscripten-futures-macros",
  "futures",
+ "local-waker",
  "serde_json",
  "tempfile",
  "tiny_http",
@@ -224,6 +225,12 @@ name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
+name = "local-waker"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d873d7c67ce09b42110d801813efbc9364414e356be9935700d368351657487"
 
 [[package]]
 name = "log"

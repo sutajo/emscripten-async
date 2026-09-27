@@ -1,6 +1,5 @@
-use super::{complete, completion, receive, succeeded};
+use super::{complete, completion, local_queue, receive, succeeded};
 use emscripten_functions_sys::{emscripten as ffi, html5};
-use futures::channel::oneshot;
 use std::{ffi::c_void, time::Duration};
 
 /// Suspends for the given duration without blocking the event loop.
@@ -11,20 +10,12 @@ use std::{ffi::c_void, time::Duration};
 ///
 /// Panics if the duration in whole milliseconds exceeds `i32::MAX`.
 pub async fn sleep(duration: Duration) {
-    unsafe extern "C" fn complete(arg: *mut c_void) {
-        // SAFETY: Each scheduled callback receives a unique boxed sender and
-        // runs once, taking back ownership even if the receiver was dropped.
-        let sender = unsafe { Box::from_raw(arg.cast::<oneshot::Sender<()>>()) };
-        let _ = sender.send(());
-    }
-
     let millis = i32::try_from(duration.as_millis()).expect("sleep duration exceeds i32::MAX ms");
-    let (sender, receiver) = oneshot::channel::<()>();
-    let arg = Box::into_raw(Box::new(sender)).cast::<c_void>();
+    let (arg, receiver) = completion::<()>();
 
     // SAFETY: The callback owns the allocation until the timer fires.
-    unsafe { ffi::emscripten_async_call(Some(complete), arg, millis) };
-    receiver.await.expect("sleep callback dropped its sender");
+    unsafe { ffi::emscripten_async_call(Some(succeeded), arg, millis) };
+    receive(receiver).await.expect("sleep callback failed");
 }
 
 /// Yields through `emscripten_set_immediate`.
@@ -80,41 +71,16 @@ pub async fn main_loop_blocker(counted: bool) {
 
 /// A bounded stream of timestamps relative to the runtime's time origin.
 /// Timestamps preserve fractional milliseconds. If a consumer falls
-/// behind, extra ticks are discarded. Dropping stops an interval immediately;
-/// callback-driven loops stop at their next scheduled tick.
-pub struct Ticks {
-    receiver: futures::channel::mpsc::Receiver<f64>,
-    interval: Option<i32>,
-    // Keeps set_interval user data alive. Each callback clones it before waking.
-    _state: Option<std::rc::Rc<std::cell::RefCell<futures::channel::mpsc::Sender<f64>>>>,
-}
+/// behind, extra ticks are discarded. After dropping the stream, the next
+/// scheduled tick stops the timer and releases its callback state.
+pub type Ticks = local_queue::Receiver<Duration>;
 
-impl futures::Stream for Ticks {
-    type Item = Duration;
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Duration>> {
-        std::pin::Pin::new(&mut self.receiver)
-            .poll_next(cx)
-            .map(|tick| tick.map(|millis| Duration::from_secs_f64(millis / 1000.0)))
-    }
-}
-
-impl Drop for Ticks {
-    fn drop(&mut self) {
-        if let Some(id) = self.interval {
-            unsafe { html5::emscripten_clear_interval(id) };
-        }
-    }
-}
-
-type TickSender = futures::channel::mpsc::Sender<f64>;
+type TickSender = local_queue::Sender<Duration>;
 
 // Loop callbacks own their sender until the receiving stream is disconnected.
 unsafe extern "C" fn loop_tick(time: f64, arg: *mut c_void) -> bool {
-    let mut sender = unsafe { Box::from_raw(arg.cast::<TickSender>()) };
-    let keep_running = match sender.try_send(time) {
+    let sender = unsafe { Box::from_raw(arg.cast::<TickSender>()) };
+    let keep_running = match sender.send(Duration::from_secs_f64(time / 1000.0)) {
         Ok(()) => true,
         Err(error) => error.is_full(),
     };
@@ -129,15 +95,9 @@ unsafe extern "C" fn immediate_tick(arg: *mut c_void) -> bool {
 }
 
 fn tick_channel() -> (*mut c_void, Ticks) {
-    let (sender, receiver) = futures::channel::mpsc::channel(1);
-    (
-        Box::into_raw(Box::new(sender)).cast(),
-        Ticks {
-            receiver,
-            interval: None,
-            _state: None,
-        },
-    )
+    // Preserve the old futures channel's buffer plus its one sender slot.
+    let (sender, receiver) = local_queue::bounded(2);
+    (Box::into_raw(Box::new(sender)).cast(), receiver)
 }
 
 /// Repeated callbacks through `emscripten_set_timeout_loop`.
@@ -163,25 +123,38 @@ pub fn animation_frames() -> Ticks {
     ticks
 }
 
-/// Periodic ticks through `emscripten_set_interval`. Dropping clears the timer.
+/// Periodic ticks through `emscripten_set_interval`.
+/// After dropping the stream, the next tick clears the timer.
 pub fn interval(period: Duration) -> Ticks {
+    struct Interval {
+        sender: TickSender,
+        id: i32,
+    }
+
     unsafe extern "C" fn tick(arg: *mut c_void) {
-        let ptr = arg.cast::<std::cell::RefCell<TickSender>>();
-        // Keep the state alive if waking the receiver drops the stream inline.
-        unsafe { std::rc::Rc::increment_strong_count(ptr) };
-        let state = unsafe { std::rc::Rc::from_raw(ptr) };
-        let _ = state
-            .borrow_mut()
-            .try_send(unsafe { ffi::emscripten_get_now() });
+        let interval_ptr = arg.cast::<Interval>();
+        // The callback retains the allocation until the receiver disconnects.
+        let state = unsafe { &*interval_ptr };
+
+        let time = Duration::from_secs_f64(unsafe { ffi::emscripten_get_now() } / 1000.0);
+        match state.sender.send(time) {
+            Err(error) if !error.is_full() => {
+                unsafe { html5::emscripten_clear_interval(state.id) };
+                let _ = state;
+                drop(unsafe { Box::from_raw(interval_ptr) });
+            }
+            _ => {}
+        }
     }
+
     let millis = i32::try_from(period.as_millis()).expect("period exceeds i32::MAX ms");
-    let (sender, receiver) = futures::channel::mpsc::channel(1);
-    let state = std::rc::Rc::new(std::cell::RefCell::new(sender));
-    let arg = std::rc::Rc::as_ptr(&state).cast_mut().cast();
-    let id = unsafe { html5::emscripten_set_interval(Some(tick), millis as f64, arg) };
-    Ticks {
-        receiver,
-        interval: Some(id),
-        _state: Some(state),
+    let (sender, receiver) = local_queue::bounded(2);
+    let state = Box::into_raw(Box::new(Interval { sender, id: 0 }));
+
+    // set_interval schedules its first callback after returning, so initialize
+    // the handle before transferring control back to the event loop.
+    unsafe {
+        (*state).id = html5::emscripten_set_interval(Some(tick), millis as f64, state.cast());
     }
+    receiver
 }

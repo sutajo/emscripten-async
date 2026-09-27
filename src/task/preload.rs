@@ -1,7 +1,6 @@
 use super::legacy::{LegacyOperation, legacy};
-use super::{Completion, c_string, receive};
+use super::{Completion, c_string, local_queue, receive};
 use emscripten_functions_sys::emscripten as ffi;
-use futures::channel::oneshot;
 use std::{
     ffi::{CStr, c_char, c_void},
     io,
@@ -44,7 +43,7 @@ pub async fn preload_data(data: &[u8], suffix: &str) -> io::Result<String> {
     let suffix = c_string(suffix)?;
     let len = i32::try_from(data.len())
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-    let (sender, receiver) = oneshot::channel();
+    let (sender, receiver) = local_queue::bounded(1);
     let mut state = Box::new(PreloadData {
         sender,
         data: data.to_vec(),
