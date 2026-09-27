@@ -6,6 +6,7 @@ edition = "2024"
 description = "A local async executor and awaitable Emscripten operations for Rust WebAssembly applications"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
+repository = "https://github.com/sutajo/emscripten-async"
 keywords = ["emscripten", "wasm", "async", "executor", "jspi"]
 categories = ["asynchronous", "wasm"]
 include = ["src/**", "build.rs", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
