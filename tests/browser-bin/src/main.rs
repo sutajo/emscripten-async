@@ -1,9 +1,11 @@
-use emscripten_functions_sys::emscripten as ffi;
 use emscripten_futures::{executor::block_on, task::*};
+use emscripten_rs_sys as ffi;
 use futures::{StreamExt, future::Either};
 use std::{cell::Cell, time::Duration};
 
 fn main() {
+    println!("running browser_spawned_tasks");
+    browser_spawned_tasks();
     println!("running browser_downloads_and_http_errors");
     browser_downloads_and_http_errors();
     println!("running browser_five_file_downloads_with_join");
@@ -259,4 +261,23 @@ fn browser_worker_reply_is_owned() {
     let bytes = block_on(unsafe { call_worker(worker, "echo", &[0, 7, 255]) }).unwrap();
     unsafe { ffi::emscripten_destroy_worker(worker) };
     assert_eq!(bytes, [0, 7, 255]);
+}
+
+fn browser_spawned_tasks() {
+    block_on(async {
+        let (first_send, first_recv) = futures::channel::oneshot::channel();
+        let (second_send, second_recv) = futures::channel::oneshot::channel();
+        spawn_local(async move {
+            let data = Wget::data("/bytes", "GET", "").await.unwrap();
+            first_send.send(data).unwrap();
+        });
+        spawn_local(async move {
+            animation_frame().await;
+            sleep(Duration::ZERO).await;
+            second_send.send(42).unwrap();
+        });
+        let (first, second) = futures::join!(first_recv, second_recv);
+        assert_eq!(first.unwrap(), [0, 1, 2, 255]);
+        assert_eq!(second.unwrap(), 42);
+    });
 }

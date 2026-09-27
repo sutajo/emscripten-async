@@ -1,6 +1,6 @@
 use super::*;
 use crate::executor::block_on;
-use emscripten_functions_sys::emscripten as ffi;
+use emscripten_rs_sys as ffi;
 use futures::StreamExt;
 use std::time::{Duration, Instant};
 

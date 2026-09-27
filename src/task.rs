@@ -27,6 +27,8 @@ mod indexed_db;
 mod legacy;
 mod preload;
 mod script;
+#[cfg(feature = "spawn")]
+mod spawn;
 mod timer;
 mod worker;
 
@@ -37,6 +39,8 @@ pub use indexed_db::Idb;
 pub use preload::{preload, preload_data};
 #[allow(deprecated)]
 pub use script::load_script;
+#[cfg(feature = "spawn")]
+pub use spawn::spawn_local;
 pub use timer::{
     Ticks, animation_frame, animation_frames, immediate_loop, interval, main_loop_blocker, sleep,
     timeout, timeout_loop, yield_now,

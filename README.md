@@ -7,6 +7,7 @@ The executor uses JavaScript Promise Integration (JSPI) to yield to the browser
 or Node event loop while Rust futures are pending. It provides `block_on`,
 `LocalPool`, and `LocalSpawner` and works with `futures` combinators such as
 `join` and `select`. Run the executor and its wakeups on the same thread.
+Cross-thread wakeups panic before accessing executor state.
 Its internal notifier coalesces wakeups and creates a JavaScript promise only
 when it must suspend; already pending notifications require no allocation.
 
@@ -15,14 +16,22 @@ when it must suspend; already pending notifications require no allocation.
 Install the Emscripten SDK and the Rust target:
 
 ```text
-rustup target add wasm32-unknown-emscripten
+rustup toolchain install nightly
+rustup target add wasm32-unknown-emscripten --toolchain nightly
 ```
 
 Add the dependency to your application:
 
 ```toml
 [dependencies]
-emscripten-futures = "0.6"
+emscripten-futures = "0.7"
+```
+
+The default `spawn` feature requires nightly Rust. Build with `cargo +nightly`.
+For stable Rust without spawning, use:
+
+```toml
+emscripten-futures = { version = "0.7", default-features = false }
 ```
 
 Enable JSPI when linking your application. For example, in `.cargo/config.toml`:
@@ -52,6 +61,29 @@ fn main() {
 ```
 
 ## Task APIs
+
+The `spawn` feature, enabled by default, provides `task::spawn_local`:
+
+```toml
+emscripten-futures = { version = "0.7", features = ["spawn"] }
+```
+
+The `spawn` feature enables `emscripten_rs_sys/nightly` and requires nightly Rust.
+It is enabled by default; use `default-features = false` for the stable-compatible
+API without spawning. Spawning uses `EM_ASM` to schedule polling with JavaScript's
+`queueMicrotask`. Spawned futures run on the calling thread, may hold non-`Send`
+values, and do not require a running `LocalPool`. The first poll is deferred;
+each task keeps the runtime alive until it completes. Cross-thread wakeups are
+not supported and panic before accessing task state. Drop retained wakers on
+the originating thread: dropping the last waker on another thread panics and
+skips cleanup of its local state. Tasks are detached and have no cancellation handle.
+
+```rust,ignore
+emscripten_futures::task::spawn_local(async {
+    emscripten_futures::task::sleep(std::time::Duration::from_millis(100)).await;
+    println!("background task completed");
+});
+```
 
 - Timers, animation frames, and streams of `Duration` timestamps.
 - Downloads to owned bytes or the Emscripten virtual filesystem.

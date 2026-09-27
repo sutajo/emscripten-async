@@ -1,5 +1,5 @@
 use super::{c_string, complete, completion, failed, loaded_bytes, receive, succeeded};
-use emscripten_functions_sys::emscripten as ffi;
+use emscripten_rs_sys as ffi;
 use std::{
     ffi::{CString, c_void},
     io,

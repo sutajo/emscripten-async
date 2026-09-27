@@ -1,5 +1,6 @@
-use emscripten_functions_sys::emscripten as ffi;
+use emscripten_rs_sys as ffi;
 use futures::task::ArcWake;
+use send_wrapper::SendWrapper;
 use std::{cell::Cell, ffi::c_void, ptr::null_mut, sync::Arc, task::Wake};
 
 mod local_pool;
@@ -9,7 +10,7 @@ pub use local_pool::*;
 mod tests;
 
 unsafe extern "C" {
-    // Available in the SDK but not yet exposed by emscripten-functions-sys.
+    // Available in the SDK but not yet exposed by emscripten_rs_sys.
     // Unlike promise_await, this does not create a .then() promise to capture
     // rejection. Our notification promises are only ever fulfilled.
     fn emscripten_promise_await_unchecked(promise: ffi::em_promise_t) -> *mut c_void;
@@ -17,25 +18,33 @@ unsafe extern "C" {
 
 // Multiple wakers, one waiter, all on the executor's thread. A notification
 // received before wait() is consumed without allocating a native promise.
-#[derive(Default)]
 struct PromiseWaker {
+    state: SendWrapper<PromiseWakerState>,
+}
+
+#[derive(Default)]
+struct PromiseWakerState {
     promise: Cell<ffi::em_promise_t>,
     notified: Cell<bool>,
 }
 
-// Waker/ArcWake require Send + Sync, but this executor and all of its wakeups
-// must stay on the same thread, as documented by the crate.
-unsafe impl Send for PromiseWaker {}
-unsafe impl Sync for PromiseWaker {}
+impl Default for PromiseWaker {
+    fn default() -> Self {
+        Self {
+            state: SendWrapper::new(PromiseWakerState::default()),
+        }
+    }
+}
 
 impl PromiseWaker {
     fn notify(&self) {
-        if self.notified.replace(true) {
+        let state = &*self.state;
+        if state.notified.replace(true) {
             // Already notified
             return;
         }
 
-        let promise = self.promise.get();
+        let promise = state.promise.get();
         if !promise.is_null() {
             // There is a waiter
             unsafe {
@@ -49,25 +58,29 @@ impl PromiseWaker {
     }
 
     fn wait(&self) {
-        assert!(self.promise.get().is_null(), "only one waiter is supported");
-        if self.notified.replace(false) {
+        let state = &*self.state;
+        assert!(
+            state.promise.get().is_null(),
+            "only one waiter is supported"
+        );
+        if state.notified.replace(false) {
             // Already notified, don't suspend
             return;
         }
 
         let promise = unsafe { ffi::emscripten_promise_create() };
         assert!(!promise.is_null());
-        self.promise.set(promise);
+        state.promise.set(promise);
         // No borrow is held across suspension. Wakeups resolve this handle;
         // additional wakeups before resuming are coalesced by notified.
         unsafe { emscripten_promise_await_unchecked(promise) };
-        self.promise.set(null_mut());
+        state.promise.set(null_mut());
         unsafe { ffi::emscripten_promise_destroy(promise) };
-        self.notified.set(false);
+        state.notified.set(false);
     }
 
     fn woken(&self) -> bool {
-        self.notified.get()
+        self.state.notified.get()
     }
 }
 

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::waker_clone_wake,
+    reason = "Test both owned and borrowed wake paths"
+)]
+
 use super::{LocalPool, PromiseWaker, block_on};
 use crate::task::sleep;
 use futures::{
@@ -19,23 +24,23 @@ fn pending_wakes_are_coalesced_and_consumed() {
     let notify = Arc::new(PromiseWaker::default());
     let waker = Waker::from(notify.clone());
     assert!(!notify.woken());
-    assert!(notify.promise.get().is_null());
+    assert!(notify.state.promise.get().is_null());
 
     for _ in 0..3 {
         waker.wake_by_ref();
         waker.clone().wake();
         assert!(notify.woken());
-        assert!(notify.promise.get().is_null());
+        assert!(notify.state.promise.get().is_null());
 
         notify.wait();
         assert!(!notify.woken());
-        assert!(notify.promise.get().is_null());
+        assert!(notify.state.promise.get().is_null());
     }
 }
 
 #[test]
 fn cloned_wakers_notify_one_waiter_across_repeated_suspensions() {
-    use emscripten_functions_sys::emscripten as ffi;
+    use emscripten_rs_sys as ffi;
     use std::ffi::c_void;
 
     struct Notification {
@@ -46,7 +51,7 @@ fn cloned_wakers_notify_one_waiter_across_repeated_suspensions() {
 
     unsafe extern "C" fn wake(arg: *mut c_void) {
         let notification = unsafe { Box::from_raw(arg.cast::<Notification>()) };
-        let promise = notification.notify.promise.get();
+        let promise = notification.notify.state.promise.get();
         assert!(!promise.is_null());
         assert!(!notification.notify.woken());
 
@@ -54,7 +59,7 @@ fn cloned_wakers_notify_one_waiter_across_repeated_suspensions() {
         notification.second.wake_by_ref();
         notification.second.clone().wake();
         assert!(notification.notify.woken());
-        assert_eq!(notification.notify.promise.get(), promise);
+        assert_eq!(notification.notify.state.promise.get(), promise);
     }
 
     let notify = Arc::new(PromiseWaker::default());
@@ -71,15 +76,15 @@ fn cloned_wakers_notify_one_waiter_across_repeated_suspensions() {
         }
         notify.wait();
         assert!(!notify.woken());
-        assert!(notify.promise.get().is_null());
+        assert!(notify.state.promise.get().is_null());
 
         // The same waker can also leave a notification before the next wait.
         first.wake_by_ref();
         assert!(notify.woken());
-        assert!(notify.promise.get().is_null());
+        assert!(notify.state.promise.get().is_null());
         notify.wait();
         assert!(!notify.woken());
-        assert!(notify.promise.get().is_null());
+        assert!(notify.state.promise.get().is_null());
     }
 }
 

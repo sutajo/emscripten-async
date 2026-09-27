@@ -1,6 +1,6 @@
 use super::{Completion, receive};
 use crate::channel::mpsc;
-use emscripten_functions_sys::emscripten as ffi;
+use emscripten_rs_sys as ffi;
 use std::{
     cell::RefCell,
     ffi::{CString, c_char},

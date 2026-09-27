@@ -18,8 +18,8 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 name = "browser-test-bin"
 version = "0.0.0"
 dependencies = [
- "emscripten-functions-sys",
  "emscripten-futures",
+ "emscripten_rs_sys",
  "futures",
 ]
 
@@ -36,20 +36,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
 
 [[package]]
-name = "emscripten-functions-sys"
-version = "5.0.401"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c1f3aa9a59cdd296650e7ba9bb966ad418aa754c17a5af69860a51153106a95"
-
-[[package]]
 name = "emscripten-futures"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "browser-test-bin",
- "emscripten-functions-sys",
  "emscripten-futures-macros",
+ "emscripten_rs_sys",
  "futures",
  "local-waker",
+ "send_wrapper",
  "serde_json",
  "tempfile",
  "tiny_http",
@@ -63,6 +58,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "emscripten-rs-macros"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e86f9365bec8ed5391e958e94af02a4d26301c304d66872e151124abe3ed7a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "emscripten_rs_sys"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18e375b02e7184004c977b47704ac6a223542310cd7f47daee42e6c3ad7cbac0"
+dependencies = [
+ "emscripten-rs-macros",
 ]
 
 [[package]]
@@ -301,6 +316,12 @@ dependencies = [
  "linux-raw-sys",
  "windows-sys",
 ]
+
+[[package]]
+name = "send_wrapper"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 
 [[package]]
 name = "serde"

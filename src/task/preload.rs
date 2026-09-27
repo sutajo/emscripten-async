@@ -1,7 +1,7 @@
 use super::legacy::{LegacyOperation, legacy};
 use super::{Completion, c_string, receive};
 use crate::channel::mpsc;
-use emscripten_functions_sys::emscripten as ffi;
+use emscripten_rs_sys as ffi;
 use std::{
     ffi::{CStr, c_char, c_void},
     io,

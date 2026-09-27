@@ -1,6 +1,6 @@
 use super::{complete, completion, receive, succeeded};
 use crate::channel::mpsc;
-use emscripten_functions_sys::{emscripten as ffi, html5};
+use emscripten_rs_sys as ffi;
 use std::{ffi::c_void, time::Duration};
 
 /// Suspends for the given duration without blocking the event loop.
@@ -22,7 +22,7 @@ pub async fn sleep(duration: Duration) {
 /// Yields through `emscripten_set_immediate`.
 pub async fn yield_now() {
     let (arg, receiver) = completion::<()>();
-    unsafe { html5::emscripten_set_immediate(Some(succeeded), arg) };
+    unsafe { ffi::emscripten_set_immediate(Some(succeeded), arg) };
     receive(receiver).await.expect("immediate callback failed");
 }
 
@@ -31,7 +31,7 @@ pub async fn yield_now() {
 pub async fn timeout(duration: Duration) {
     let millis = i32::try_from(duration.as_millis()).expect("timeout exceeds i32::MAX ms");
     let (arg, receiver) = completion::<()>();
-    unsafe { html5::emscripten_set_timeout(Some(succeeded), millis as f64, arg) };
+    unsafe { ffi::emscripten_set_timeout(Some(succeeded), millis as f64, arg) };
     receive(receiver).await.expect("timeout callback failed");
 }
 
@@ -43,7 +43,7 @@ pub async fn animation_frame() -> Duration {
         false
     }
     let (arg, receiver) = completion::<f64>();
-    unsafe { html5::emscripten_request_animation_frame(Some(frame), arg) };
+    unsafe { ffi::emscripten_request_animation_frame(Some(frame), arg) };
     let millis = receive(receiver)
         .await
         .expect("animation frame callback failed");
@@ -106,21 +106,21 @@ fn tick_channel() -> (*mut c_void, Ticks) {
 pub fn timeout_loop(period: Duration) -> Ticks {
     let millis = i32::try_from(period.as_millis()).expect("period exceeds i32::MAX ms");
     let (arg, ticks) = tick_channel();
-    unsafe { html5::emscripten_set_timeout_loop(Some(loop_tick), millis as f64, arg) };
+    unsafe { ffi::emscripten_set_timeout_loop(Some(loop_tick), millis as f64, arg) };
     ticks
 }
 
 /// Repeated event-loop turns through `emscripten_set_immediate_loop`.
 pub fn immediate_loop() -> Ticks {
     let (arg, ticks) = tick_channel();
-    unsafe { html5::emscripten_set_immediate_loop(Some(immediate_tick), arg) };
+    unsafe { ffi::emscripten_set_immediate_loop(Some(immediate_tick), arg) };
     ticks
 }
 
 /// Browser animation frames through `emscripten_request_animation_frame_loop`.
 pub fn animation_frames() -> Ticks {
     let (arg, ticks) = tick_channel();
-    unsafe { html5::emscripten_request_animation_frame_loop(Some(loop_tick), arg) };
+    unsafe { ffi::emscripten_request_animation_frame_loop(Some(loop_tick), arg) };
     ticks
 }
 
@@ -140,7 +140,7 @@ pub fn interval(period: Duration) -> Ticks {
         let time = Duration::from_secs_f64(unsafe { ffi::emscripten_get_now() } / 1000.0);
         match state.sender.send(time) {
             Err(error) if !error.is_full() => {
-                unsafe { html5::emscripten_clear_interval(state.id) };
+                unsafe { ffi::emscripten_clear_interval(state.id) };
                 let _ = state;
                 drop(unsafe { Box::from_raw(interval_ptr) });
             }
@@ -155,7 +155,7 @@ pub fn interval(period: Duration) -> Ticks {
     // set_interval schedules its first callback after returning, so initialize
     // the handle before transferring control back to the event loop.
     unsafe {
-        (*state).id = html5::emscripten_set_interval(Some(tick), millis as f64, state.cast());
+        (*state).id = ffi::emscripten_set_interval(Some(tick), millis as f64, state.cast());
     }
     receiver
 }

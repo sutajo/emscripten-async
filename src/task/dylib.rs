@@ -1,5 +1,5 @@
 use super::{c_string, complete, completion, failed, receive};
-use emscripten_functions_sys::emscripten as ffi;
+use emscripten_rs_sys as ffi;
 use std::{ffi::c_void, io};
 
 unsafe extern "C" {
