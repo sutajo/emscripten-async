@@ -96,8 +96,8 @@ unsafe extern "C" fn immediate_tick(arg: *mut c_void) -> bool {
 }
 
 fn tick_channel() -> (*mut c_void, Ticks) {
-    // Preserve the old futures channel's buffer plus its one sender slot.
-    let (sender, receiver) = mpsc::bounded(2);
+    // Keep at most one pending tick; discard further ticks until it is consumed.
+    let (sender, receiver) = mpsc::bounded(1);
     (Box::into_raw(Box::new(sender)).cast(), receiver)
 }
 
@@ -149,7 +149,7 @@ pub fn interval(period: Duration) -> Ticks {
     }
 
     let millis = i32::try_from(period.as_millis()).expect("period exceeds i32::MAX ms");
-    let (sender, receiver) = mpsc::bounded(2);
+    let (sender, receiver) = mpsc::bounded(1);
     let state = Box::into_raw(Box::new(Interval { sender, id: 0 }));
 
     // set_interval schedules its first callback after returning, so initialize
