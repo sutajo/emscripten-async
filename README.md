@@ -20,7 +20,7 @@ Add the dependency to your application:
 
 ```toml
 [dependencies]
-emscripten-futures = "0.1"
+emscripten-futures = "0.2"
 ```
 
 Enable JSPI when linking your application. For example, in `.cargo/config.toml`:
@@ -73,6 +73,24 @@ async fn example() -> std::io::Result<()> {
 }
 ```
 
+## Async tests
+
+Use `#[emscripten_futures::test]` on an async function to run it with this crate's
+`block_on` executor:
+
+```rust
+#[emscripten_futures::test]
+async fn timer_completes() {
+    emscripten_futures::task::sleep(std::time::Duration::from_millis(10)).await;
+}
+```
+
+The macro generates an ordinary Rust test, preserving test discovery, filtering,
+`#[ignore]`, and `#[should_panic]`. Tests can return `Result<(), E>` and use `?`.
+They run on the calling thread and can hold non-`Send` values across `.await`.
+Test functions must have no arguments or generic parameters. Enable `-sJSPI`
+when linking the test executable, as shown above for applications.
+
 ## Development
 
 From the source checkout, run `cargo +nightly test` for Node unit tests and
@@ -86,6 +104,12 @@ cargo +nightly test --target x86_64-pc-windows-msvc --test browser -- --nocaptur
 Use your native target on other platforms. Set `BROWSER` to the browser executable
 if automatic discovery does not find it. The browser test fixture is kept in the
 source checkout and is excluded from the published package.
+
+Run the proc-macro crate's tests on the native target:
+
+```text
+cargo +nightly test -p emscripten-futures-macros --target x86_64-pc-windows-msvc
+```
 
 ## License
 

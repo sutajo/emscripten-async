@@ -1,5 +1,5 @@
 use futures::task::ArcWake;
-use std::{sync::Arc, task::Wake};
+use std::{cell::RefCell, sync::Arc, task::Wake};
 
 mod local_pool;
 pub use local_pool::*;
@@ -11,7 +11,7 @@ use crate::promise::Promise;
 
 #[derive(Default)]
 struct PromiseWaker {
-    promise: Promise<()>,
+    promise: RefCell<Promise<()>>,
 }
 
 unsafe impl Send for PromiseWaker {}
@@ -19,15 +19,18 @@ unsafe impl Sync for PromiseWaker {}
 
 impl PromiseWaker {
     fn notify(&self) {
-        let _ = self.promise.fulfill(());
+        let _ = self.promise.borrow().fulfill(());
     }
 
     fn wait(&self) {
-        self.promise.wait();
+        self.promise.borrow().wait();
+        // A promise retains its result. Start a fresh notification cycle after
+        // releasing both the result borrow and the borrow of the old promise.
+        self.promise.replace(Promise::default());
     }
 
     fn woken(&self) -> bool {
-        self.promise.is_resolved()
+        self.promise.borrow().is_resolved()
     }
 }
 

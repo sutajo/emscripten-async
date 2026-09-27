@@ -1,51 +1,52 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Ref, RefCell},
     ptr::null_mut,
+    rc::{Rc, Weak},
 };
 
 use emscripten_functions_sys::emscripten::*;
 
-/// A reusable local promise whose payload remains owned by Rust until it is taken.
+/// A local promise that settles once and retains its result for all waiters.
 pub struct Promise<T> {
-    handle: Cell<em_promise_t>,
+    // Only active waiters own the handle; the promise can find it to resolve it.
+    handle: RefCell<Weak<PromiseHandle>>,
     value: RefCell<Option<Result<T, ()>>>,
-    waiting: Cell<bool>,
+}
+
+struct PromiseHandle(em_promise_t);
+
+impl Drop for PromiseHandle {
+    fn drop(&mut self) {
+        unsafe { emscripten_promise_destroy(self.0) };
+    }
 }
 
 impl<T> Promise<T> {
     /// Fulfills the promise, returning the value if a result is already resolved.
     pub fn fulfill(&self, value: T) -> Result<(), T> {
-        let mut value_ref = self.value.borrow_mut();
-        if value_ref.is_none() {
-            *value_ref = Some(Ok(value));
-
-            if self.waiting.get() {
-                unsafe {
-                    emscripten_promise_resolve(
-                        self.handle.get(),
-                        em_promise_result_t_EM_PROMISE_FULFILL,
-                        null_mut(),
-                    );
-                }
-            }
-
-            Ok(())
-        } else {
-            Err(value)
-        }
+        self.try_resolve(Ok(value)).map_err(|err| err.unwrap())
     }
 
     /// Rejects the promise, returning an error if a result is already resolved.
     pub fn reject(&self) -> Result<(), ()> {
-        let mut value_ref = self.value.borrow_mut();
-        if value_ref.is_none() {
-            *value_ref = Some(Err(()));
+        self.try_resolve(Err(())).map_err(|_| ())
+    }
 
-            if self.waiting.get() {
+    fn try_resolve(&self, result: Result<T, ()>) -> Result<(), Result<T, ()>> {
+        if self.value.borrow().is_none() {
+            let fulfilled = result.is_ok();
+            *self.value.borrow_mut() = Some(result);
+
+            let handle = self.handle.borrow().upgrade();
+            if let Some(handle) = handle {
                 unsafe {
                     emscripten_promise_resolve(
-                        self.handle.get(),
-                        em_promise_result_t_EM_PROMISE_REJECT,
+                        handle.0,
+                        if fulfilled {
+                            em_promise_result_t_EM_PROMISE_FULFILL
+                        } else {
+                            em_promise_result_t_EM_PROMISE_REJECT
+                        },
                         null_mut(),
                     );
                 }
@@ -53,50 +54,54 @@ impl<T> Promise<T> {
 
             Ok(())
         } else {
-            Err(())
+            Err(result)
         }
     }
 
-    /// Suspends until completion, consumes the result, and resets the promise.
-    /// Returns `None` on rejection. A subsequent wait awaits a new completion.
-    pub fn wait(&self) -> Option<T> {
-        {
-            let mut value = self.value.borrow_mut();
-            if value.is_some() {
-                return value.take().unwrap().ok();
-            }
+    /// Suspends until completion and borrows the retained value.
+    ///
+    /// Returns `None` on rejection. Repeated and reentrant waits observe the
+    /// same result; waiting never consumes the value or resets the promise.
+    /// Multiple returned borrows may coexist.
+    ///
+    /// Pending waits require a JSPI-enabled call context. This method manages
+    /// the promise handle, not separate Emscripten stacks for concurrent calls.
+    pub fn wait(&self) -> Option<Ref<'_, T>> {
+        if !self.is_resolved() {
+            let handle = {
+                let mut shared = self.handle.borrow_mut();
+                shared.upgrade().unwrap_or_else(|| {
+                    let raw = unsafe { emscripten_promise_create() };
+                    assert!(!raw.is_null());
+                    let handle = Rc::new(PromiseHandle(raw));
+                    *shared = Rc::downgrade(&handle);
+                    handle
+                })
+            };
+            // Release the RefCell borrow before suspending so callbacks and
+            // other waiters can access it. The last Rc destroys the handle.
+            unsafe { emscripten_promise_await(handle.0) };
         }
 
-        self.waiting.set(true);
-        unsafe { emscripten_promise_await(self.handle.get()) };
-        self.waiting.set(false);
-
-        let result = self.value.borrow_mut().take().unwrap();
-        // JavaScript promises settle only once; each cycle needs a fresh handle.
-        let previous = self.handle.replace(unsafe { emscripten_promise_create() });
-        unsafe { emscripten_promise_destroy(previous) };
-        result.ok()
+        Ref::filter_map(self.value.borrow(), |value| value.as_ref()?.as_ref().ok()).ok()
     }
 
     pub fn is_resolved(&self) -> bool {
         self.value.borrow().is_some()
     }
+
+    /// Whether a call to [`Self::wait`] is currently suspended.
+    pub fn has_waiter(&self) -> bool {
+        self.handle.borrow().strong_count() != 0
+    }
 }
 
 impl<T> Default for Promise<T> {
     fn default() -> Self {
-        let handle = unsafe { emscripten_promise_create() };
         Self {
-            handle: Cell::new(handle),
+            handle: RefCell::default(),
             value: RefCell::default(),
-            waiting: Cell::default(),
         }
-    }
-}
-
-impl<T> Drop for Promise<T> {
-    fn drop(&mut self) {
-        unsafe { emscripten_promise_destroy(self.handle.get()) };
     }
 }
 
@@ -124,26 +129,34 @@ mod tests {
     fn promise_resolve_immediately() {
         let p = Promise::<i32>::default();
         p.fulfill(100).unwrap();
-        assert_eq!(p.wait(), Some(100));
+        let first = p.wait().unwrap();
+        let second = p.wait().unwrap();
+        assert_eq!(*first, 100);
+        assert!(std::ptr::eq(&*first, &*second));
+        assert!(p.is_resolved());
+        assert!(!p.has_waiter());
     }
 
     #[test]
     fn promise_reject() {
         let p = Promise::<()>::default();
         p.reject().unwrap();
-        assert_eq!(p.wait(), None);
+        assert!(p.wait().is_none());
+        assert!(p.wait().is_none());
+        assert!(p.is_resolved());
     }
 
     #[test]
-    fn consumed_value_remains_owned_by_the_caller() {
+    fn borrowed_value_remains_owned_by_the_promise() {
         let drops = Rc::new(Cell::new(0));
         let p = Promise::default();
         p.fulfill(DropCounter(drops.clone())).unwrap();
         let value = p.wait().unwrap();
-        assert!(!p.is_resolved());
-        drop(p);
+        assert!(p.is_resolved());
         assert_eq!(drops.get(), 0);
         drop(value);
+        assert_eq!(drops.get(), 0);
+        drop(p);
         assert_eq!(drops.get(), 1);
     }
 
@@ -161,12 +174,15 @@ mod tests {
         let drops = Rc::new(Cell::new(0));
         let p = Promise::default();
         p.fulfill(DropCounter(drops.clone())).unwrap();
+        let borrowed = p.wait().unwrap();
         let unaccepted = p.fulfill(DropCounter(drops.clone())).unwrap_err();
         assert_eq!(p.reject(), Err(()));
         assert_eq!(drops.get(), 0);
         drop(unaccepted);
         assert_eq!(drops.get(), 1);
-        drop(p.wait().unwrap());
+        drop(borrowed);
+        assert_eq!(drops.get(), 1);
+        drop(p);
         assert_eq!(drops.get(), 2);
     }
 
@@ -184,28 +200,73 @@ mod tests {
     }
 
     #[test]
-    fn promise_can_wait_for_multiple_callback_completions() {
+    fn callback_completion_is_retained_for_later_waits() {
         unsafe extern "C" fn fulfill(arg: *mut std::ffi::c_void) {
             let promise = unsafe { Rc::from_raw(arg.cast::<Promise<usize>>()) };
             promise.fulfill(42).unwrap();
         }
-        let promise = Rc::new(Promise::default());
-        for cycle in 0..3 {
-            // Exercise both already-completed paths before another pending wait.
-            if cycle == 1 {
-                promise.fulfill(7).unwrap();
-                assert_eq!(promise.wait(), Some(7));
-            } else if cycle == 2 {
-                promise.reject().unwrap();
-                assert_eq!(promise.wait(), None);
+        let promise = Rc::new(Promise::<usize>::default());
+        let arg = Rc::into_raw(promise.clone()).cast_mut().cast();
+        unsafe {
+            emscripten_functions_sys::emscripten::emscripten_async_call(Some(fulfill), arg, 0);
+        }
+        let first = promise.wait().unwrap();
+        let second = promise.wait().unwrap();
+        assert_eq!(*first, 42);
+        assert!(std::ptr::eq(&*first, &*second));
+        assert!(promise.is_resolved());
+        assert!(!promise.has_waiter());
+        assert!(promise.handle.borrow().upgrade().is_none());
+    }
+
+    #[test]
+    fn callback_can_borrow_the_result_before_the_suspended_waiter_resumes() {
+        use emscripten_functions_sys::emscripten as ffi;
+        use std::ffi::c_void;
+
+        struct State {
+            promise: Promise<usize>,
+            reject: bool,
+            observed: Cell<Option<usize>>,
+            retained_handle: Cell<bool>,
+        }
+
+        unsafe extern "C" fn settle(arg: *mut c_void) {
+            let state = unsafe { Rc::from_raw(arg.cast::<State>()) };
+            let handle = state.promise.handle.borrow().clone();
+            if state.reject {
+                state.promise.reject().unwrap();
+            } else {
+                state.promise.fulfill(42).unwrap();
             }
-            assert!(!promise.is_resolved());
-            let arg = Rc::into_raw(promise.clone()).cast_mut().cast();
-            unsafe {
-                emscripten_functions_sys::emscripten::emscripten_async_call(Some(fulfill), arg, 0);
-            }
-            assert_eq!(promise.wait(), Some(42));
-            assert!(!promise.is_resolved());
+            // Reenter wait while the original caller is still suspended.
+            // This settled wait must not destroy that caller's handle.
+            let result = state.promise.wait();
+            state.observed.set(result.as_deref().copied());
+            state.retained_handle.set(
+                handle.upgrade().is_some()
+                    && handle.ptr_eq(&state.promise.handle.borrow())
+                    && state.promise.has_waiter(),
+            );
+        }
+
+        for reject in [false, true] {
+            let state = Rc::new(State {
+                promise: Promise::default(),
+                reject,
+                observed: Cell::new(None),
+                retained_handle: Cell::new(false),
+            });
+            let arg = Rc::into_raw(state.clone()).cast_mut().cast();
+            unsafe { ffi::emscripten_async_call(Some(settle), arg, 0) };
+            let first = state.promise.wait();
+            let expected = if reject { None } else { Some(42) };
+            assert_eq!(first.as_deref().copied(), expected);
+            assert_eq!(state.observed.get(), expected);
+            assert!(state.retained_handle.get());
+            assert!(!state.promise.has_waiter());
+            assert!(state.promise.handle.borrow().upgrade().is_none());
+            assert_eq!(state.promise.wait().as_deref().copied(), expected);
         }
     }
 }

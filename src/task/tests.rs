@@ -4,10 +4,10 @@ use emscripten_functions_sys::emscripten as ffi;
 use futures::StreamExt;
 use std::time::Duration;
 
-#[test]
-fn sleep_completes() {
+#[crate::test]
+async fn sleep_completes() {
     for duration in [Duration::ZERO, Duration::from_millis(100)] {
-        block_on(sleep(duration));
+        sleep(duration).await;
     }
 }
 
