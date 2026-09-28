@@ -6,5 +6,5 @@ publish = false
 
 [dependencies]
 emscripten-futures = { path = "../.." }
-emscripten_rs_sys = "0.3.0"
+emscripten_rs_sys = "0.4.0"
 futures = "0.3.34"

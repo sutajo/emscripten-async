@@ -13,11 +13,18 @@ when it must suspend; already pending notifications require no allocation.
 
 ## Usage
 
-Install the Emscripten SDK and the Rust target:
+The default `spawn` feature requires **Rust `nightly-2026-08-29` or newer**.
+This is the first nightly containing
+the [WebAssembly `link_section` fix](https://github.com/rust-lang/rust/pull/161862)
+needed by `emscripten_rs_sys::em_asm::js_asm!` for task spawning. Its compiler version
+is `rustc 1.100.0-nightly (17fd5b8a3 2026-08-28)`; the rustup toolchain date is
+August 29 even though `rustc --version` reports the August 28 commit date.
+
+Install the Emscripten SDK and the minimum Rust toolchain with its target:
 
 ```text
-rustup toolchain install nightly
-rustup target add wasm32-unknown-emscripten --toolchain nightly
+rustup toolchain install nightly-2026-08-29
+rustup target add wasm32-unknown-emscripten --toolchain nightly-2026-08-29
 ```
 
 Add the dependency to your application:
@@ -27,12 +34,18 @@ Add the dependency to your application:
 emscripten-futures = "0.7"
 ```
 
-The default `spawn` feature requires nightly Rust. Build with `cargo +nightly`.
-For stable Rust without spawning, use:
+Build with `cargo +nightly-2026-08-29 build`, or `cargo +nightly build` with a newer
+nightly installed.
+
+For stable Rust, disable the default `spawn` feature:
 
 ```toml
 emscripten-futures = { version = "0.7", default-features = false }
 ```
+
+Install the target with `rustup target add wasm32-unknown-emscripten --toolchain stable`
+and build your application with `cargo +stable build`. The executor, task operations,
+channels, and async test macro remain available; `task::spawn_local` requires `spawn`.
 
 Enable JSPI when linking your application. For example, in `.cargo/config.toml`:
 
@@ -62,20 +75,13 @@ fn main() {
 
 ## Task APIs
 
-The `spawn` feature, enabled by default, provides `task::spawn_local`:
-
-```toml
-emscripten-futures = { version = "0.7", features = ["spawn"] }
-```
-
-The `spawn` feature enables `emscripten_rs_sys/nightly` and requires nightly Rust.
-It is enabled by default; use `default-features = false` for the stable-compatible
-API without spawning. Spawning uses `EM_ASM` to schedule polling with JavaScript's
-`queueMicrotask`. Spawned futures run on the calling thread, may hold non-`Send`
-values, and do not require a running `LocalPool`. Each microtask polls once,
+The `spawn` feature, enabled by default, provides `task::spawn_local` (JSPI is not
+needed for spawning itself). Spawning schedules polling
+with JavaScript's `queueMicrotask`. Spawned futures run on the calling thread,
+may hold non-`Send` values, and do not require a running `LocalPool`. Each microtask polls once,
 with repeated wakes coalesced. Wakes during polling schedule another microtask
 only if the future remains pending; wakes after completion on the originating
-thread are ignored. Each task keeps the runtime alive until it completes.
+thread are ignored. Each task keeps the Emscripten runtime alive until it completes.
 Wakers may be cloned and dropped on any thread, but cross-thread wakeups are
 not supported and panic before accessing task state. Tasks are detached and
 have no cancellation handle; dropping the caller does not cancel them.
@@ -143,10 +149,39 @@ They run on the calling thread and can hold non-`Send` values across `.await`.
 Test functions must have no arguments or generic parameters. Enable `-sJSPI`
 when linking the test executable, as shown above for applications.
 
+## Async benchmarks
+
+Use `#[emscripten_futures::bench]` on a zero-argument async function in a file such
+as `benches/timers.rs`. Benchmarks use Rust's built-in harness and require
+nightly Rust and `#![feature(test)]`, even when `spawn` is disabled:
+
+```rust,ignore
+#![feature(test)]
+extern crate test;
+
+#[emscripten_futures::bench]
+async fn yield_to_event_loop() {
+    emscripten_futures::task::yield_now().await;
+}
+```
+
+Run with `cargo +nightly bench --bench timers`. Enable `-sJSPI` when linking, as
+for async tests. Each measured iteration creates a fresh future and runs it to
+completion with `block_on`, including executor overhead and time spent awaiting
+operations. Futures and return values may be non-`Send`. Returned values are
+passed to the harness's black box; returning `Err` does not automatically fail a
+benchmark, so use assertions or `unwrap()` when errors should fail the run.
+Functions must not take arguments or generic parameters. `#[ignore]` and
+`#[cfg(...)]` are preserved.
+
 ## Development
 
 From the source checkout, run `cargo +nightly test` for Node unit tests and
-doctests. The browser integration test uses nightly Cargo artifact dependencies
+doctests. Use `cargo +nightly bench --bench async_bench` for the async benchmarks,
+or `cargo +nightly test --bench async_bench` to run each once without measuring.
+The source workspace requires nightly Cargo for its browser artifact dependency;
+applications using the crate with `default-features = false` can use stable Cargo.
+The browser integration test uses nightly Cargo artifact dependencies
 and a locally installed Chrome. On Windows:
 
 ```text

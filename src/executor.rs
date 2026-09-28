@@ -1,20 +1,13 @@
 use emscripten_rs_sys as ffi;
 use futures::task::ArcWake;
 use send_wrapper::SendWrapper;
-use std::{cell::Cell, ffi::c_void, ptr::null_mut, sync::Arc};
+use std::{cell::Cell, ptr::null_mut, sync::Arc};
 
 mod local_pool;
 pub use local_pool::*;
 
 #[cfg(test)]
 mod tests;
-
-unsafe extern "C" {
-    // Available in the SDK but not yet exposed by emscripten_rs_sys.
-    // Unlike promise_await, this does not create a .then() promise to capture
-    // rejection. Our notification promises are only ever fulfilled.
-    fn emscripten_promise_await_unchecked(promise: ffi::em_promise_t) -> *mut c_void;
-}
 
 // Multiple wakers, one waiter, all on the executor's thread. A notification
 // received before wait() is consumed without allocating a native promise.
@@ -73,7 +66,9 @@ impl PromiseWaker {
         state.promise.set(promise);
         // No borrow is held across suspension. Wakeups resolve this handle;
         // additional wakeups before resuming are coalesced by notified.
-        unsafe { emscripten_promise_await_unchecked(promise) };
+        // Unlike promise_await, this does not create a .then() promise to capture
+        // rejection. Our notification promises are only ever fulfilled.
+        unsafe { ffi::emscripten_promise_await_unchecked(promise) };
         state.promise.set(null_mut());
         unsafe { ffi::emscripten_promise_destroy(promise) };
         state.notified.set(false);

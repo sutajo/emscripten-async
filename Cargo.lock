@@ -37,7 +37,7 @@ checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
 
 [[package]]
 name = "emscripten-futures"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "browser-test-bin",
  "emscripten-futures-macros",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "emscripten-futures-macros"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -62,9 +62,9 @@ dependencies = [
 
 [[package]]
 name = "emscripten-rs-macros"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94e86f9365bec8ed5391e958e94af02a4d26301c304d66872e151124abe3ed7a"
+checksum = "8c4149d0cefc116b63fe62515f0f447d12e2d889dda1cbb6d36c8ddb4026908a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -73,9 +73,9 @@ dependencies = [
 
 [[package]]
 name = "emscripten_rs_sys"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18e375b02e7184004c977b47704ac6a223542310cd7f47daee42e6c3ad7cbac0"
+checksum = "107b361f96af7c019ee298a919b61656ca0d139a2b961960340f0cf2ce06a1e6"
 dependencies = [
  "emscripten-rs-macros",
 ]

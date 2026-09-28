@@ -1,5 +1,5 @@
 //! Bounded local queue adapted from local-channel 0.1.5's src/mpsc.rs:
-//! https://docs.rs/local-channel/0.1.5/src/local_channel/mpsc.rs.html
+//! <https://docs.rs/local-channel/0.1.5/src/local_channel/mpsc.rs.html>
 //!
 //! Copyright (c) 2017-NOW Actix Team. Used under the MIT license; see
 //! ../../LICENSE-MIT (which includes the upstream copyright notice).

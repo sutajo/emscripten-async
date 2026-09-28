@@ -12,14 +12,14 @@ async fn waits_for_timer_with_non_send_state() {
     assert_eq!(value.get(), 42);
 }
 
-#[emscripten_futures::test]
+#[test]
 async fn preserves_result_and_question_mark() -> Result<(), std::num::ParseIntError> {
     task::sleep(Duration::ZERO).await;
     assert_eq!("42".parse::<u32>()?, 42);
     Ok(())
 }
 
-#[emscripten_futures::test]
+#[test]
 #[should_panic(expected = "async test panic")]
 async fn preserves_should_panic() {
     task::sleep(Duration::ZERO).await;
@@ -27,12 +27,12 @@ async fn preserves_should_panic() {
 }
 
 #[ignore = "checks that attributes survive macro expansion"]
-#[emscripten_futures::test]
+#[test]
 async fn preserves_ignore() {
     task::sleep(Duration::ZERO).await;
 }
 
-#[emscripten_futures::test]
+#[test]
 #[cfg(any())]
 async fn preserves_cfg() {
     this_must_not_be_compiled();
