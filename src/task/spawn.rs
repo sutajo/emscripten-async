@@ -46,7 +46,7 @@ struct QueueMicrotaskWaker {
 
 struct MicrotaskWakerState {
     task: Cell<*mut SpawnedTask>,
-    needs_poll: Cell<bool>,
+    notified: Cell<bool>,
     // False while polling and after completion, when task may be dangling.
     is_sleeping: Cell<bool>,
 }
@@ -54,7 +54,7 @@ struct MicrotaskWakerState {
 impl Wake for QueueMicrotaskWaker {
     fn wake(self: Arc<Self>) {
         let state = &*self.state;
-        if !state.needs_poll.replace(true) && state.is_sleeping.get() {
+        if !state.notified.replace(true) && state.is_sleeping.get() {
             schedule(state.task.get());
         }
     }
@@ -69,7 +69,7 @@ pub extern "C" fn emscripten_futures_poll_task(task: *mut c_void) {
     let state = &*task.mwaker.state;
 
     state.is_sleeping.set(false);
-    state.needs_poll.set(false);
+    state.notified.set(false);
     let result = task
         .future
         .poll_unpin(&mut Context::from_waker(&task.waker));
@@ -82,9 +82,9 @@ pub extern "C" fn emscripten_futures_poll_task(task: *mut c_void) {
         }
         Poll::Pending => {
             state.is_sleeping.set(true);
-            let needs_poll = state.needs_poll.get();
+            let notified = state.notified.get();
             let task_ptr = Box::into_raw(task);
-            if needs_poll {
+            if notified {
                 schedule(task_ptr);
             }
         }
@@ -116,16 +116,20 @@ fn schedule(raw_task: *mut SpawnedTask) {
 /// Await asynchronous operations inside the future rather than calling
 /// `block_on` or otherwise suspending a poll with JSPI.
 pub fn spawn_local(f: impl Future<Output = ()> + 'static) {
+    spawn_local_boxed(f.boxed_local());
+}
+
+fn spawn_local_boxed(f: LocalBoxFuture<'static, ()>) {
     let waker_state = SendWrapper::new(MicrotaskWakerState {
         task: Cell::default(),
         // The first poll is already scheduled, so further wakes must be coalesced.
-        needs_poll: Cell::new(true),
+        notified: Cell::new(true),
         is_sleeping: Cell::new(true),
     });
     let mwaker = Arc::new(QueueMicrotaskWaker { state: waker_state });
     let waker = Waker::from(mwaker.clone());
     let mut spawned_task: Box<SpawnedTask> = Box::new(SpawnedTask {
-        future: f.boxed_local(),
+        future: f,
         mwaker,
         waker,
         _keepalive: Default::default(),
