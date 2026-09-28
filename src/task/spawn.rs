@@ -47,6 +47,14 @@ struct MicroTaskWakerWrapper {
     wrapper: SendWrapper<microtask_waker::MicroTaskWaker>,
 }
 
+impl MicroTaskWakerWrapper {
+    // Share SendWrapper's thread check between polling, waking, and setup.
+    #[inline(never)]
+    fn waker(&self) -> &MicroTaskWaker {
+        &self.wrapper
+    }
+}
+
 mod microtask_waker {
     use crate::task::spawn::{SpawnedTask, schedule};
     use bitflags::bitflags;
@@ -110,19 +118,19 @@ mod microtask_waker {
 
 impl ArcWake for MicroTaskWakerWrapper {
     fn wake_by_ref(arc_self: &Arc<Self>) {
-        arc_self.wrapper.try_wake();
+        arc_self.waker().try_wake();
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn emscripten_futures_poll_task(task: *mut c_void) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
         let task_ptr = task.cast::<SpawnedTask>();
         // SAFETY: at most one callback is queued, and the Box stays allocated
         // until its final poll. Wakes during polling cannot queue a callback.
         // Owning the Box inside the catch also drops the task if polling unwinds.
         let mut task = unsafe { Box::from_raw(task_ptr) };
-        let state = &*task.mwaker.wrapper;
+        let state = task.mwaker.waker();
 
         state.start_poll();
         let result = {
@@ -142,9 +150,20 @@ pub extern "C" fn emscripten_futures_poll_task(task: *mut c_void) {
                 let _ = Box::into_raw(task);
             }
         }
-    }));
+    })) {
+        drop_panic_payload(payload);
+    }
 }
 
+#[cold]
+#[inline(never)]
+fn drop_panic_payload(payload: Box<dyn std::any::Any + Send>) {
+    // Keep payload destruction and its unwind cleanup off the normal poll path.
+    drop(payload);
+}
+
+// Share the JavaScript call setup between spawning and waking tasks.
+#[inline(never)]
 fn schedule(raw_task: *mut SpawnedTask) {
     js_asm! {
         |raw_task| {
@@ -200,6 +219,6 @@ fn spawn_local_boxed(f: LocalBoxFuture<'static, ()>) {
         _keepalive: Default::default(),
     });
     let task_ptr = Box::as_mut_ptr(&mut spawned_task);
-    spawned_task.mwaker.wrapper.init(task_ptr);
+    spawned_task.mwaker.waker().init(task_ptr);
     schedule(Box::into_raw(spawned_task));
 }
