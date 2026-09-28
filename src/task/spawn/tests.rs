@@ -14,7 +14,7 @@ use std::{
     cell::{Cell, RefCell},
     panic::AssertUnwindSafe,
     rc::Rc,
-    task::Poll,
+    task::{Poll, Waker},
     time::Duration,
 };
 
@@ -218,4 +218,51 @@ async fn remote_handle_propagates_task_panic_to_awaiter() {
         panic.downcast_ref::<&str>(),
         Some(&"expected remote task panic")
     );
+}
+
+#[crate::test]
+async fn catches_future_drop_panic_after_completion() {
+    struct PanicOnDrop {
+        drops: Rc<Cell<usize>>,
+        waker: Rc<RefCell<Option<Waker>>>,
+    }
+
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+            // A destructor must not enqueue another poll of the dying task.
+            self.waker.borrow().as_ref().unwrap().wake_by_ref();
+            panic!("expected future destructor panic");
+        }
+    }
+
+    let drops = Rc::new(Cell::new(0));
+    let polls = Rc::new(Cell::new(0));
+    let task_polls = polls.clone();
+    let waker = Rc::new(RefCell::new(None));
+    let on_drop = PanicOnDrop {
+        drops: drops.clone(),
+        waker: waker.clone(),
+    };
+    // Keep the destructor in the future until the executor drops it.
+    spawn_local(poll_fn(move |cx| {
+        *on_drop.waker.borrow_mut() = Some(cx.waker().clone());
+        task_polls.set(task_polls.get() + 1);
+        Poll::Ready(())
+    }));
+
+    sleep(Duration::ZERO).await;
+    assert_eq!(drops.get(), 1);
+    assert_eq!(Rc::strong_count(&drops), 1, "future fields were retained");
+    assert_eq!(Rc::strong_count(&polls), 1, "future captures were retained");
+
+    let waker = waker.borrow_mut().take().unwrap();
+    waker.wake_by_ref();
+    waker.wake();
+    let ran = Rc::new(Cell::new(false));
+    let task_ran = ran.clone();
+    spawn_local(async move { task_ran.set(true) });
+    sleep(Duration::ZERO).await;
+    assert_eq!(polls.get(), 1, "destroyed future was polled again");
+    assert!(ran.get(), "executor stopped after a destructor panicked");
 }

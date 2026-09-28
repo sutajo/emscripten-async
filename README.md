@@ -88,10 +88,12 @@ have no cancellation handle; dropping the caller does not cancel them.
 Await asynchronous operations inside spawned futures instead of calling
 `block_on` or otherwise suspending a poll with JSPI.
 
-With `panic = "unwind"`, a panic while polling a spawned future is caught. The
-failed future is dropped and its runtime keepalive is released; other tasks can
-continue, and retained wakers cannot reschedule it. The panic hook still runs.
-Panics while dropping the future or panic payload are not caught, and
+With `panic = "unwind"`, one catch covers polling and dropping a spawned future.
+If polling panics, the task is dropped while unwinding and its runtime keepalive
+is released. A destructor panic after normal completion is also caught. Other
+tasks can continue, and retained wakers cannot reschedule the failed task.
+The panic hook still runs. A destructor panic during a polling panic's unwind
+aborts, as does a panic while dropping the caught panic payload.
 `panic = "abort"` builds cannot recover from panics.
 
 For a result or panic propagation to an awaiter, use `FutureExt::remote_handle()`

@@ -1,13 +1,13 @@
 use emscripten_rs_sys::em_asm::{SignatureBuilder, emscripten_asm_const_int, js_asm};
 use futures::{
     FutureExt,
-    future::{CatchUnwind, LocalBoxFuture},
+    future::LocalBoxFuture,
     task::{ArcWake, waker_ref},
 };
 use send_wrapper::SendWrapper;
 use std::{
     ffi::c_void,
-    panic::AssertUnwindSafe,
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
     task::{Context, Poll},
 };
@@ -37,7 +37,7 @@ mod keepalive {
 }
 
 struct SpawnedTask {
-    future: CatchUnwind<AssertUnwindSafe<LocalBoxFuture<'static, ()>>>,
+    future: LocalBoxFuture<'static, ()>,
     mwaker: Arc<MicroTaskWakerWrapper>,
     _keepalive: EmscriptenKeepalive,
 }
@@ -116,30 +116,33 @@ impl ArcWake for MicroTaskWakerWrapper {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn emscripten_futures_poll_task(task: *mut c_void) {
-    let task_ptr = task.cast::<SpawnedTask>();
-    // SAFETY: at most one callback is queued, and the Box stays allocated
-    // until its final poll. Wakes during polling cannot queue a callback.
-    let mut task = unsafe { Box::from_raw(task_ptr) };
-    let state = &*task.mwaker.wrapper;
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let task_ptr = task.cast::<SpawnedTask>();
+        // SAFETY: at most one callback is queued, and the Box stays allocated
+        // until its final poll. Wakes during polling cannot queue a callback.
+        // Owning the Box inside the catch also drops the task if polling unwinds.
+        let mut task = unsafe { Box::from_raw(task_ptr) };
+        let state = &*task.mwaker.wrapper;
 
-    state.start_poll();
-    let result = {
-        let waker = waker_ref(&task.mwaker);
-        let mut cx = Context::from_waker(&waker);
-        task.future.poll_unpin(&mut cx)
-    };
+        state.start_poll();
+        let result = {
+            let waker = waker_ref(&task.mwaker);
+            let mut cx = Context::from_waker(&waker);
+            task.future.poll_unpin(&mut cx)
+        };
 
-    match result {
-        Poll::Ready(_) => {
-            // Leave SLEEPING clear so retained wakers cannot schedule the
-            // freed task, including wakes from the future's destructor.
-            drop(task);
+        match result {
+            Poll::Ready(()) => {
+                // Leave SLEEPING clear so retained wakers cannot schedule the
+                // freed task, including wakes from the future's destructor.
+                drop(task);
+            }
+            Poll::Pending => {
+                state.try_sleep();
+                let _ = Box::into_raw(task);
+            }
         }
-        Poll::Pending => {
-            state.try_sleep();
-            let _ = Box::into_raw(task);
-        }
-    }
+    }));
 }
 
 fn schedule(raw_task: *mut SpawnedTask) {
@@ -169,10 +172,13 @@ fn schedule(raw_task: *mut SpawnedTask) {
 ///
 /// # Panics
 ///
-/// With `panic = "unwind"`, panics while polling are caught and the failed future
-/// is dropped, releasing its runtime keepalive. The panic hook still runs, and
-/// other tasks can continue. Retained wakers cannot reschedule the failed task.
-/// Panics while dropping the future or panic payload are not caught, and
+/// With `panic = "unwind"`, one catch covers polling and dropping the future.
+/// If polling panics, the task is dropped while unwinding, releasing its runtime
+/// keepalive. A destructor panic after normal completion is also caught.
+/// The panic hook still runs, and other tasks can continue. Retained wakers
+/// cannot reschedule the failed task.
+/// If the destructor panics during a polling panic's unwind, the double panic
+/// aborts. Panics while dropping a caught panic payload are not caught, and
 /// `panic = "abort"` builds cannot recover from panics.
 ///
 /// To receive a result or propagate a polling panic to an awaiter, use
@@ -189,7 +195,7 @@ fn spawn_local_boxed(f: LocalBoxFuture<'static, ()>) {
         wrapper: waker_state,
     });
     let mut spawned_task: Box<SpawnedTask> = Box::new(SpawnedTask {
-        future: AssertUnwindSafe(f).catch_unwind(),
+        future: f,
         mwaker,
         _keepalive: Default::default(),
     });

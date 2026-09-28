@@ -1,7 +1,7 @@
 [package]
 name = "emscripten-futures"
 authors = ["Tamás Suhajda"]
-version = "0.7.6"
+version = "0.7.7"
 edition = "2024"
 description = "A local async executor and awaitable Emscripten operations for Rust WebAssembly applications"
 license = "MIT OR Apache-2.0"
