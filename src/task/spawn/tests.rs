@@ -135,3 +135,25 @@ async fn can_spawn_from_a_task_and_its_destructor() {
     sleep(Duration::ZERO).await;
     assert_eq!(count.get(), 2);
 }
+
+#[crate::test]
+async fn ignores_wakes_after_completion_without_a_self_wake() {
+    let polls = Rc::new(Cell::new(0));
+    let task_polls = polls.clone();
+    let retained_waker = Rc::new(RefCell::new(None));
+    let task_waker = retained_waker.clone();
+    spawn_local(poll_fn(move |cx| {
+        task_polls.set(task_polls.get() + 1);
+        *task_waker.borrow_mut() = Some(cx.waker().clone());
+        Poll::Ready(())
+    }));
+
+    sleep(Duration::ZERO).await;
+    assert_eq!(polls.get(), 1);
+    assert_eq!(Rc::strong_count(&polls), 1, "completed future was retained");
+    let waker = retained_waker.borrow_mut().take().unwrap();
+    waker.wake_by_ref();
+    waker.wake();
+    sleep(Duration::ZERO).await;
+    assert_eq!(polls.get(), 1);
+}

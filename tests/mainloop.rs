@@ -1,8 +1,8 @@
 cfg_select! {
     target_os = "emscripten" => {
-        use std::time::Duration;
         use emscripten_futures::task::{self, spawn_local};
         use futures::StreamExt;
+        use std::time::Duration;
 
         struct AppState {
             counter: usize,

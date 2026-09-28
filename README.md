@@ -72,11 +72,15 @@ The `spawn` feature enables `emscripten_rs_sys/nightly` and requires nightly Rus
 It is enabled by default; use `default-features = false` for the stable-compatible
 API without spawning. Spawning uses `EM_ASM` to schedule polling with JavaScript's
 `queueMicrotask`. Spawned futures run on the calling thread, may hold non-`Send`
-values, and do not require a running `LocalPool`. The first poll is deferred;
-each task keeps the runtime alive until it completes. Cross-thread wakeups are
-not supported and panic before accessing task state. Drop retained wakers on
-the originating thread: dropping the last waker on another thread panics and
-skips cleanup of its local state. Tasks are detached and have no cancellation handle.
+values, and do not require a running `LocalPool`. Each microtask polls once,
+with repeated wakes coalesced. Wakes during polling schedule another microtask
+only if the future remains pending; wakes after completion on the originating
+thread are ignored. Each task keeps the runtime alive until it completes.
+Wakers may be cloned and dropped on any thread, but cross-thread wakeups are
+not supported and panic before accessing task state. Tasks are detached and
+have no cancellation handle; dropping the caller does not cancel them.
+Await asynchronous operations inside spawned futures instead of calling
+`block_on` or otherwise suspending a poll with JSPI.
 
 ```rust,ignore
 emscripten_futures::task::spawn_local(async {
