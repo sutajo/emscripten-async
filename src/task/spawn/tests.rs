@@ -6,11 +6,13 @@
 use super::spawn_local;
 use crate::{executor::block_on, task::sleep};
 use futures::{
+    FutureExt,
     channel::oneshot::{self, Canceled},
     future::poll_fn,
 };
 use std::{
     cell::{Cell, RefCell},
+    panic::AssertUnwindSafe,
     rc::Rc,
     task::Poll,
     time::Duration,
@@ -156,4 +158,64 @@ async fn ignores_wakes_after_completion_without_a_self_wake() {
     waker.wake();
     sleep(Duration::ZERO).await;
     assert_eq!(polls.get(), 1);
+}
+
+#[crate::test]
+async fn drops_panicking_tasks_and_ignores_their_wakes() {
+    for self_wake in [false, true] {
+        let polls = Rc::new(Cell::new(0));
+        let task_polls = polls.clone();
+        let retained_waker = Rc::new(RefCell::new(None));
+        let task_waker = retained_waker.clone();
+        // poll_fn keeps its captures until the executor drops the future,
+        // so the reference count below verifies cleanup after catching the panic.
+        spawn_local(poll_fn(move |cx| -> Poll<()> {
+            task_polls.set(task_polls.get() + 1);
+            *task_waker.borrow_mut() = Some(cx.waker().clone());
+            if self_wake {
+                cx.waker().wake_by_ref();
+            }
+            panic!("expected detached task panic");
+        }));
+
+        sleep(Duration::ZERO).await;
+        assert_eq!(polls.get(), 1);
+        assert_eq!(Rc::strong_count(&polls), 1, "panicked future was retained");
+
+        let waker = retained_waker.borrow_mut().take().unwrap();
+        waker.wake_by_ref();
+        waker.wake();
+
+        let ran = Rc::new(Cell::new(false));
+        let task_ran = ran.clone();
+        spawn_local(async move { task_ran.set(true) });
+        sleep(Duration::ZERO).await;
+        assert_eq!(polls.get(), 1, "panicked future was polled again");
+        assert!(ran.get(), "executor stopped after a task panicked");
+    }
+}
+
+#[crate::test]
+async fn remote_handle_propagates_task_panic_to_awaiter() {
+    let state = Rc::new(());
+    let task_state = state.clone();
+    let (task, handle) = poll_fn(move |_| -> Poll<()> {
+        let _ = &task_state;
+        panic!("expected remote task panic");
+    })
+    .remote_handle();
+    spawn_local(task);
+
+    // Bound the wait so a missing panic notification fails instead of hanging.
+    sleep(Duration::ZERO).await;
+    assert_eq!(Rc::strong_count(&state), 1, "panicked future was retained");
+    let panic = AssertUnwindSafe(handle)
+        .catch_unwind()
+        .now_or_never()
+        .expect("remote handle did not receive the panic")
+        .expect_err("remote handle did not resume the panic");
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"expected remote task panic")
+    );
 }

@@ -1,18 +1,18 @@
 use emscripten_rs_sys::em_asm::{SignatureBuilder, emscripten_asm_const_int, js_asm};
 use futures::{
     FutureExt,
-    future::LocalBoxFuture,
+    future::{CatchUnwind, LocalBoxFuture},
     task::{ArcWake, waker_ref},
 };
 use send_wrapper::SendWrapper;
 use std::{
-    cell::Cell,
     ffi::c_void,
+    panic::AssertUnwindSafe,
     sync::Arc,
     task::{Context, Poll},
 };
 
-use crate::task::spawn::keepalive::EmscriptenKeepalive;
+use crate::task::spawn::{keepalive::EmscriptenKeepalive, microtask_waker::MicroTaskWaker};
 
 #[cfg(test)]
 mod tests;
@@ -37,29 +37,80 @@ mod keepalive {
 }
 
 struct SpawnedTask {
-    future: LocalBoxFuture<'static, ()>,
-    mwaker: Arc<QueueMicrotaskWaker>,
+    future: CatchUnwind<AssertUnwindSafe<LocalBoxFuture<'static, ()>>>,
+    mwaker: Arc<MicroTaskWakerWrapper>,
     _keepalive: EmscriptenKeepalive,
 }
 
 // Records wakes during polling; schedules sleeping tasks with queueMicrotask.
-struct QueueMicrotaskWaker {
-    state: SendWrapper<MicrotaskWakerState>,
+struct MicroTaskWakerWrapper {
+    wrapper: SendWrapper<microtask_waker::MicroTaskWaker>,
 }
 
-struct MicrotaskWakerState {
-    task: Cell<*mut SpawnedTask>,
-    notified: Cell<bool>,
-    // False while polling and after completion, when task may be dangling.
-    is_sleeping: Cell<bool>,
-}
+mod microtask_waker {
+    use crate::task::spawn::{SpawnedTask, schedule};
+    use bitflags::bitflags;
+    use std::cell::Cell;
 
-impl ArcWake for QueueMicrotaskWaker {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        let state = &*arc_self.state;
-        if !state.notified.replace(true) && state.is_sleeping.get() {
-            schedule(state.task.get());
+    bitflags! {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        struct TaskStateFlags : u8 {
+            const NOTIFIED = 1 << 0;
+            const SLEEPING = 1 << 1;
         }
+    }
+
+    pub struct MicroTaskWaker {
+        task: Cell<*mut SpawnedTask>,
+        task_state: Cell<TaskStateFlags>,
+    }
+
+    impl Default for MicroTaskWaker {
+        fn default() -> Self {
+            Self {
+                task: Default::default(),
+                task_state: Cell::new(TaskStateFlags::all()),
+            }
+        }
+    }
+
+    impl MicroTaskWaker {
+        #[inline]
+        pub fn init(&self, task: *mut SpawnedTask) {
+            self.task.replace(task);
+        }
+
+        #[inline]
+        pub fn start_poll(&self) {
+            self.task_state.set(TaskStateFlags::empty());
+        }
+
+        #[inline]
+        pub fn try_wake(&self) {
+            self.update_state::<{ TaskStateFlags::NOTIFIED.bits() }, { TaskStateFlags::SLEEPING.bits() }>();
+        }
+
+        #[inline]
+        pub fn try_sleep(&self) {
+            self.update_state::<{ TaskStateFlags::SLEEPING.bits() }, { TaskStateFlags::NOTIFIED.bits() }>();
+        }
+
+        #[inline]
+        fn update_state<const SET: u8, const SCHEDULE_IF: u8>(&self) {
+            let current_state = self.task_state.get().bits();
+            self.task_state
+                .set(TaskStateFlags::from_bits_retain(current_state | SET));
+            // Decide whether to schedule from the state before setting the flag.
+            if current_state == SCHEDULE_IF {
+                schedule(self.task.get());
+            }
+        }
+    }
+}
+
+impl ArcWake for MicroTaskWakerWrapper {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.wrapper.try_wake();
     }
 }
 
@@ -69,28 +120,24 @@ pub extern "C" fn emscripten_futures_poll_task(task: *mut c_void) {
     // SAFETY: at most one callback is queued, and the Box stays allocated
     // until its final poll. Wakes during polling cannot queue a callback.
     let mut task = unsafe { Box::from_raw(task_ptr) };
-    let state = &*task.mwaker.state;
+    let state = &*task.mwaker.wrapper;
 
-    state.is_sleeping.set(false);
-    state.notified.set(false);
+    state.start_poll();
     let result = {
         let waker = waker_ref(&task.mwaker);
-        task.future.poll_unpin(&mut Context::from_waker(&waker))
+        let mut cx = Context::from_waker(&waker);
+        task.future.poll_unpin(&mut cx)
     };
 
     match result {
-        Poll::Ready(()) => {
-            // Leave is_sleeping false so retained wakers cannot schedule the
+        Poll::Ready(_) => {
+            // Leave SLEEPING clear so retained wakers cannot schedule the
             // freed task, including wakes from the future's destructor.
             drop(task);
         }
         Poll::Pending => {
-            state.is_sleeping.set(true);
-            let notified = state.notified.get();
-            let task_ptr = Box::into_raw(task);
-            if notified {
-                schedule(task_ptr);
-            }
+            state.try_sleep();
+            let _ = Box::into_raw(task);
         }
     }
 }
@@ -119,24 +166,34 @@ fn schedule(raw_task: *mut SpawnedTask) {
 /// the originating thread.
 /// Await asynchronous operations inside the future rather than calling
 /// `block_on` or otherwise suspending a poll with JSPI.
+///
+/// # Panics
+///
+/// With `panic = "unwind"`, panics while polling are caught and the failed future
+/// is dropped, releasing its runtime keepalive. The panic hook still runs, and
+/// other tasks can continue. Retained wakers cannot reschedule the failed task.
+/// Panics while dropping the future or panic payload are not caught, and
+/// `panic = "abort"` builds cannot recover from panics.
+///
+/// To receive a result or propagate a polling panic to an awaiter, use
+/// [`FutureExt::remote_handle`] and spawn its `Remote` future. Keep the handle on
+/// the originating thread: dropping it requests cancellation by waking the task.
+/// Calling the handle's `forget` method instead lets the task continue detached.
 pub fn spawn_local(f: impl Future<Output = ()> + 'static) {
     spawn_local_boxed(f.boxed_local());
 }
 
 fn spawn_local_boxed(f: LocalBoxFuture<'static, ()>) {
-    let waker_state = SendWrapper::new(MicrotaskWakerState {
-        task: Cell::default(),
-        // The first poll is already scheduled, so further wakes must be coalesced.
-        notified: Cell::new(true),
-        is_sleeping: Cell::new(true),
+    let waker_state = SendWrapper::new(MicroTaskWaker::default());
+    let mwaker = Arc::new(MicroTaskWakerWrapper {
+        wrapper: waker_state,
     });
-    let mwaker = Arc::new(QueueMicrotaskWaker { state: waker_state });
     let mut spawned_task: Box<SpawnedTask> = Box::new(SpawnedTask {
-        future: f,
+        future: AssertUnwindSafe(f).catch_unwind(),
         mwaker,
         _keepalive: Default::default(),
     });
     let task_ptr = Box::as_mut_ptr(&mut spawned_task);
-    spawned_task.mwaker.state.task.set(task_ptr);
+    spawned_task.mwaker.wrapper.init(task_ptr);
     schedule(Box::into_raw(spawned_task));
 }

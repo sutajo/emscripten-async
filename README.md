@@ -88,6 +88,18 @@ have no cancellation handle; dropping the caller does not cancel them.
 Await asynchronous operations inside spawned futures instead of calling
 `block_on` or otherwise suspending a poll with JSPI.
 
+With `panic = "unwind"`, a panic while polling a spawned future is caught. The
+failed future is dropped and its runtime keepalive is released; other tasks can
+continue, and retained wakers cannot reschedule it. The panic hook still runs.
+Panics while dropping the future or panic payload are not caught, and
+`panic = "abort"` builds cannot recover from panics.
+
+For a result or panic propagation to an awaiter, use `FutureExt::remote_handle()`
+and pass its `Remote` future to `spawn_local`. Awaiting the handle returns the
+result or resumes the polling panic. Dropping the handle requests cancellation;
+calling `handle.forget()` lets the task continue detached. Keep the handle on
+the originating thread because cancellation wakes the task.
+
 ```rust,ignore
 emscripten_futures::task::spawn_local(async {
     emscripten_futures::task::sleep(std::time::Duration::from_millis(100)).await;
