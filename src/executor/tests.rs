@@ -9,7 +9,7 @@ use futures::{
     FutureExt,
     channel::oneshot,
     future::{Either, join, join_all, pending, poll_fn, select, try_join},
-    task::LocalSpawnExt,
+    task::{LocalSpawnExt, waker},
 };
 use std::{
     cell::Cell,
@@ -22,7 +22,7 @@ use std::{
 #[test]
 fn pending_wakes_are_coalesced_and_consumed() {
     let notify = Arc::new(PromiseWaker::default());
-    let waker = Waker::from(notify.clone());
+    let waker = waker(notify.clone());
     assert!(!notify.woken());
     assert!(notify.state.promise.get().is_null());
 
@@ -63,7 +63,7 @@ fn cloned_wakers_notify_one_waiter_across_repeated_suspensions() {
     }
 
     let notify = Arc::new(PromiseWaker::default());
-    let first = Waker::from(notify.clone());
+    let first = waker(notify.clone());
     let second = first.clone();
     for _ in 0..3 {
         let notification = Box::new(Notification {

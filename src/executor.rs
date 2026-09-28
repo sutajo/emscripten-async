@@ -1,7 +1,7 @@
 use emscripten_rs_sys as ffi;
 use futures::task::ArcWake;
 use send_wrapper::SendWrapper;
-use std::{cell::Cell, ffi::c_void, ptr::null_mut, sync::Arc, task::Wake};
+use std::{cell::Cell, ffi::c_void, ptr::null_mut, sync::Arc};
 
 mod local_pool;
 pub use local_pool::*;
@@ -81,16 +81,6 @@ impl PromiseWaker {
 
     fn woken(&self) -> bool {
         self.state.notified.get()
-    }
-}
-
-impl Wake for PromiseWaker {
-    fn wake(self: Arc<Self>) {
-        self.notify();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.notify();
     }
 }
 

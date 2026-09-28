@@ -1,11 +1,15 @@
 use emscripten_rs_sys::em_asm::{SignatureBuilder, emscripten_asm_const_int, js_asm};
-use futures::{FutureExt, future::LocalBoxFuture};
+use futures::{
+    FutureExt,
+    future::LocalBoxFuture,
+    task::{ArcWake, waker_ref},
+};
 use send_wrapper::SendWrapper;
 use std::{
     cell::Cell,
     ffi::c_void,
     sync::Arc,
-    task::{Context, Poll, Wake, Waker},
+    task::{Context, Poll},
 };
 
 use crate::task::spawn::keepalive::EmscriptenKeepalive;
@@ -35,7 +39,6 @@ mod keepalive {
 struct SpawnedTask {
     future: LocalBoxFuture<'static, ()>,
     mwaker: Arc<QueueMicrotaskWaker>,
-    waker: Waker,
     _keepalive: EmscriptenKeepalive,
 }
 
@@ -51,9 +54,9 @@ struct MicrotaskWakerState {
     is_sleeping: Cell<bool>,
 }
 
-impl Wake for QueueMicrotaskWaker {
-    fn wake(self: Arc<Self>) {
-        let state = &*self.state;
+impl ArcWake for QueueMicrotaskWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        let state = &*arc_self.state;
         if !state.notified.replace(true) && state.is_sleeping.get() {
             schedule(state.task.get());
         }
@@ -70,9 +73,10 @@ pub extern "C" fn emscripten_futures_poll_task(task: *mut c_void) {
 
     state.is_sleeping.set(false);
     state.notified.set(false);
-    let result = task
-        .future
-        .poll_unpin(&mut Context::from_waker(&task.waker));
+    let result = {
+        let waker = waker_ref(&task.mwaker);
+        task.future.poll_unpin(&mut Context::from_waker(&waker))
+    };
 
     match result {
         Poll::Ready(()) => {
@@ -127,11 +131,9 @@ fn spawn_local_boxed(f: LocalBoxFuture<'static, ()>) {
         is_sleeping: Cell::new(true),
     });
     let mwaker = Arc::new(QueueMicrotaskWaker { state: waker_state });
-    let waker = Waker::from(mwaker.clone());
     let mut spawned_task: Box<SpawnedTask> = Box::new(SpawnedTask {
         future: f,
         mwaker,
-        waker,
         _keepalive: Default::default(),
     });
     let task_ptr = Box::as_mut_ptr(&mut spawned_task);
