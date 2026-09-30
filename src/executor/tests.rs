@@ -24,17 +24,19 @@ fn pending_wakes_are_coalesced_and_consumed() {
     let notify = Arc::new(PromiseWaker::default());
     let waker = waker(notify.clone());
     assert!(!notify.woken());
-    assert!(notify.state.promise.get().is_null());
+
+    let state = notify.state.as_ref();
+    assert!(state.promise.get().is_null());
 
     for _ in 0..3 {
         waker.wake_by_ref();
         waker.clone().wake();
         assert!(notify.woken());
-        assert!(notify.state.promise.get().is_null());
+        assert!(state.promise.get().is_null());
 
         notify.wait();
         assert!(!notify.woken());
-        assert!(notify.state.promise.get().is_null());
+        assert!(state.promise.get().is_null());
     }
 }
 
@@ -51,7 +53,7 @@ fn cloned_wakers_notify_one_waiter_across_repeated_suspensions() {
 
     unsafe extern "C" fn wake(arg: *mut c_void) {
         let notification = unsafe { Box::from_raw(arg.cast::<Notification>()) };
-        let promise = notification.notify.state.promise.get();
+        let promise = notification.notify.state.as_ref().promise.get();
         assert!(!promise.is_null());
         assert!(!notification.notify.woken());
 
@@ -59,7 +61,7 @@ fn cloned_wakers_notify_one_waiter_across_repeated_suspensions() {
         notification.second.wake_by_ref();
         notification.second.clone().wake();
         assert!(notification.notify.woken());
-        assert_eq!(notification.notify.state.promise.get(), promise);
+        assert_eq!(notification.notify.state.as_ref().promise.get(), promise);
     }
 
     let notify = Arc::new(PromiseWaker::default());
@@ -76,15 +78,15 @@ fn cloned_wakers_notify_one_waiter_across_repeated_suspensions() {
         }
         notify.wait();
         assert!(!notify.woken());
-        assert!(notify.state.promise.get().is_null());
+        assert!(notify.state.as_ref().promise.get().is_null());
 
         // The same waker can also leave a notification before the next wait.
         first.wake_by_ref();
         assert!(notify.woken());
-        assert!(notify.state.promise.get().is_null());
+        assert!(notify.state.as_ref().promise.get().is_null());
         notify.wait();
         assert!(!notify.woken());
-        assert!(notify.state.promise.get().is_null());
+        assert!(notify.state.as_ref().promise.get().is_null());
     }
 }
 

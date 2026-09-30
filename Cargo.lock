@@ -37,14 +37,14 @@ checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
 
 [[package]]
 name = "emscripten-futures"
-version = "0.7.9"
+version = "0.7.10"
 dependencies = [
  "browser-test-bin",
  "emscripten-futures-macros",
  "emscripten_rs_sys",
  "futures",
+ "libc",
  "local-waker",
- "send_wrapper",
  "serde_json",
  "tempfile",
  "tiny_http",
@@ -316,12 +316,6 @@ dependencies = [
  "linux-raw-sys",
  "windows-sys",
 ]
-
-[[package]]
-name = "send_wrapper"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 
 [[package]]
 name = "serde"

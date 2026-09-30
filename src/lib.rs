@@ -48,3 +48,4 @@ pub use emscripten_futures_macros::bench;
 pub mod channel;
 pub mod executor;
 pub mod task;
+mod send_wrapper;

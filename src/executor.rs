@@ -1,10 +1,11 @@
 use emscripten_rs_sys as ffi;
 use futures::task::ArcWake;
-use send_wrapper::SendWrapper;
 use std::{cell::Cell, ptr::null_mut, sync::Arc};
 
 mod local_pool;
 pub use local_pool::*;
+
+use crate::send_wrapper::SendWrapper;
 
 #[cfg(test)]
 mod tests;
@@ -31,7 +32,7 @@ impl Default for PromiseWaker {
 
 impl PromiseWaker {
     fn notify(&self) {
-        let state = &*self.state;
+        let state = self.state.as_ref();
         if state.notified.replace(true) {
             // Already notified
             return;
@@ -51,7 +52,7 @@ impl PromiseWaker {
     }
 
     fn wait(&self) {
-        let state = &*self.state;
+        let state = self.state.as_ref();
         assert!(
             state.promise.get().is_null(),
             "only one waiter is supported"
@@ -75,7 +76,7 @@ impl PromiseWaker {
     }
 
     fn woken(&self) -> bool {
-        self.state.notified.get()
+        self.state.as_ref().notified.get()
     }
 }
 
