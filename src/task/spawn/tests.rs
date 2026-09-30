@@ -266,3 +266,27 @@ async fn catches_future_drop_panic_after_completion() {
     assert_eq!(polls.get(), 1, "destroyed future was polled again");
     assert!(ran.get(), "executor stopped after a destructor panicked");
 }
+
+#[crate::test]
+async fn spawn_microtasks() {
+    let mut ticks = crate::task::timeout_loop(Duration::from_millis(10));
+    let (broadcaster_tx, broadcaster_rx) = tokio::sync::broadcast::channel(1);
+    let (done_tx, done_rx) = oneshot::channel();
+    spawn_local(async move {
+        for _ in 0..100 {
+            ticks.recv().await;
+            broadcaster_tx.send(()).unwrap();
+        }
+        done_tx.send(()).unwrap();
+    });
+
+    for _ in 0..100000 {
+        let mut rx = broadcaster_rx.resubscribe();
+        spawn_local(async move {
+            while let Ok(_) = rx.recv().await {
+            }
+        });
+    }
+
+    done_rx.await.unwrap()
+}

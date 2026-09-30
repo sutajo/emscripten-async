@@ -53,7 +53,7 @@ impl PromiseWaker {
 
     fn wait(&self) {
         let state = self.state.as_ref();
-        assert!(
+        debug_assert!(
             state.promise.get().is_null(),
             "only one waiter is supported"
         );
@@ -63,7 +63,7 @@ impl PromiseWaker {
         }
 
         let promise = unsafe { ffi::emscripten_promise_create() };
-        assert!(!promise.is_null());
+        debug_assert!(!promise.is_null());
         state.promise.set(promise);
         // No borrow is held across suspension. Wakeups resolve this handle;
         // additional wakeups before resuming are coalesced by notified.

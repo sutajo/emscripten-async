@@ -37,7 +37,7 @@ checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
 
 [[package]]
 name = "emscripten-futures"
-version = "0.7.10"
+version = "0.7.11"
 dependencies = [
  "browser-test-bin",
  "emscripten-futures-macros",
@@ -48,6 +48,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tiny_http",
+ "tokio",
 ]
 
 [[package]]
@@ -410,6 +411,15 @@ dependencies = [
  "chunked_transfer",
  "httpdate",
  "log",
+]
+
+[[package]]
+name = "tokio"
+version = "1.53.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+dependencies = [
+ "pin-project-lite",
 ]
 
 [[package]]
