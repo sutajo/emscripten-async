@@ -57,27 +57,27 @@ impl MicroTaskWakerWrapper {
 
 mod microtask_waker {
     use crate::task::spawn::{SpawnedTask, schedule};
-    use bitflags::bitflags;
     use std::cell::Cell;
 
-    bitflags! {
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        struct TaskStateFlags : u8 {
-            const NOTIFIED = 1 << 0;
-            const SLEEPING = 1 << 1;
-        }
+    #[repr(u8)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum MicroTaskState {
+        Sleeping,
+        Polled,
+        NeedsScheduling
     }
+    
 
     pub struct MicroTaskWaker {
         task: Cell<*mut SpawnedTask>,
-        task_state: Cell<TaskStateFlags>,
+        task_state: Cell<MicroTaskState>,
     }
 
     impl Default for MicroTaskWaker {
         fn default() -> Self {
             Self {
                 task: Default::default(),
-                task_state: Cell::new(TaskStateFlags::all()),
+                task_state: Cell::new(MicroTaskState::Sleeping),
             }
         }
     }
@@ -85,31 +85,27 @@ mod microtask_waker {
     impl MicroTaskWaker {
         #[inline]
         pub fn init(&self, task: *mut SpawnedTask) {
-            self.task.replace(task);
+            self.task.set(task);
         }
 
-        #[inline]
-        pub fn start_poll(&self) {
-            self.task_state.set(TaskStateFlags::empty());
+        pub fn before_poll(&self)
+        {
+            self.task_state.set(MicroTaskState::Polled);
         }
 
         #[inline]
         pub fn try_wake(&self) {
-            self.update_state::<{ TaskStateFlags::NOTIFIED.bits() }, { TaskStateFlags::SLEEPING.bits() }>();
+            // Only schedule if the task was Sleeping.
+            // If the task is being polled currently, it will reschedule itself.
+            if self.task_state.replace(MicroTaskState::NeedsScheduling) == MicroTaskState::Sleeping {
+                schedule(self.task.get());
+            }
         }
 
         #[inline]
         pub fn try_sleep(&self) {
-            self.update_state::<{ TaskStateFlags::SLEEPING.bits() }, { TaskStateFlags::NOTIFIED.bits() }>();
-        }
-
-        #[inline]
-        fn update_state<const SET: u8, const SCHEDULE_IF: u8>(&self) {
-            let current_state = self.task_state.get().bits();
-            self.task_state
-                .set(TaskStateFlags::from_bits_retain(current_state | SET));
-            // Decide whether to schedule from the state before setting the flag.
-            if current_state == SCHEDULE_IF {
+            // Go back to sleep, but also reschedule the task if during polling somebody woke us.
+            if self.task_state.replace(MicroTaskState::Sleeping) == MicroTaskState::NeedsScheduling {
                 schedule(self.task.get());
             }
         }
@@ -132,7 +128,7 @@ pub extern "C" fn emscripten_futures_poll_task(task: *mut c_void) {
         let mut task = unsafe { Box::from_raw(task_ptr) };
         let state = task.mwaker.waker();
 
-        state.start_poll();
+        state.before_poll();
         let result = {
             let waker = waker_ref(&task.mwaker);
             let mut cx = Context::from_waker(&waker);

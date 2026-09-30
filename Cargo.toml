@@ -22,7 +22,7 @@ features = ["spawn"]
 
 [features]
 default = ["spawn"]
-spawn = ["dep:bitflags"]
+spawn = []
 
 [target.'cfg(target_os = "emscripten")'.dependencies]
 emscripten_rs_sys = "0.4.0"
@@ -30,7 +30,6 @@ emscripten-futures-macros = { version = "0.1.2", path = "macros" }
 futures = "0.3.34"
 local-waker = "0.1.4"
 send_wrapper = "0.6.0"
-bitflags = { version = "2.13.2", optional = true }
 
 [target.'cfg(not(target_os = "emscripten"))'.dev-dependencies]
 browser-test-bin = { path = "tests/browser-bin", artifact = "bin", target = "wasm32-unknown-emscripten" }
