@@ -50,31 +50,26 @@ mod microtask_waker {
     use std::{cell::Cell, sync::Arc};
 
     #[repr(u8)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy, PartialEq, Eq, Default)]
     enum MicroTaskState {
+        #[default]
         Sleeping,
         Polled,
         NeedsScheduling,
     }
 
     pub struct MicroTaskWaker {
-        task: Cell<*mut SpawnedTask>,
+        task: *mut SpawnedTask,
         task_state: Cell<MicroTaskState>,
-    }
-
-    impl Default for MicroTaskWaker {
-        fn default() -> Self {
-            Self {
-                task: Default::default(),
-                task_state: Cell::new(MicroTaskState::Sleeping),
-            }
-        }
     }
 
     impl MicroTaskWaker {
         #[inline]
-        pub(super) fn init(&self, task: *mut SpawnedTask) {
-            self.task.set(task);
+        pub(super) fn new(task: *mut SpawnedTask) -> Self {
+            Self {
+                task,
+                task_state: Cell::default()
+            }
         }
 
         #[inline]
@@ -88,7 +83,7 @@ mod microtask_waker {
             // If the task is being polled currently, it will reschedule itself.
             if self.task_state.replace(MicroTaskState::NeedsScheduling) == MicroTaskState::Sleeping
             {
-                schedule(self.task.get());
+                schedule(self.task);
             }
         }
 
@@ -97,7 +92,7 @@ mod microtask_waker {
             // Go back to sleep, but also reschedule the task if during polling somebody woke us.
             if self.task_state.replace(MicroTaskState::Sleeping) == MicroTaskState::NeedsScheduling
             {
-                schedule(self.task.get());
+                schedule(self.task);
             }
         }
     }
@@ -147,8 +142,6 @@ fn drop_panic_payload(payload: Box<dyn std::any::Any + Send>) {
     drop(payload);
 }
 
-// Share the JavaScript call setup between spawning and waking tasks.
-#[inline(never)]
 fn schedule(raw_task: *mut SpawnedTask) {
     js_asm! {
         |raw_task| {
@@ -194,9 +187,8 @@ pub fn spawn_local(f: impl Future<Output = ()> + 'static) {
 }
 
 fn spawn_local_boxed(f: LocalBoxFuture<'static, ()>) {
-    let microtask_waker = MicroTaskWaker::default();
     let mut uninitialized_task = Box::new_uninit();
-    microtask_waker.init(uninitialized_task.as_mut_ptr() as _);
+    let microtask_waker = MicroTaskWaker::new(uninitialized_task.as_mut_ptr() as _);
     let inner_waker = Arc::new(SendWrapper::new(microtask_waker));
     let waker = waker(inner_waker.clone());
     uninitialized_task.write(SpawnedTask {
